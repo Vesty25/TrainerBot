@@ -34,45 +34,60 @@ user_messages: dict[int, list[dict]] = {}
 # Хранилище параметров игры
 user_game_data: dict[int, dict] = {}
 
+# Сопоставление кнопок и значений
+ROLE_BUTTONS = {}      # "Вариант 1" -> "Требовательный Заказчик (Дмитрий)"
+SCENARIO_BUTTONS = {}  # "Вариант 1" -> "Срыв сроков"
+GOAL_BUTTONS = {}      # "Вариант 1" -> "Отстоять границы и сказать «нет»"
 
-# === Вспомогательные функции для клавиатур ===
 
 def build_role_keyboard():
-    """Клавиатура выбора роли оппонента."""
+    """Клавиатура выбора роли — Вариант 1, Вариант 2, Вариант 3."""
+    global ROLE_BUTTONS
+    ROLE_BUTTONS = {}
     buttons = []
-    for role_name in ROLES.keys():
-        buttons.append([types.KeyboardButton(text=role_name)])
+    for i, role_name in enumerate(ROLES.keys(), start=1):
+        button_text = f"Вариант {i}"
+        ROLE_BUTTONS[button_text] = role_name
+        buttons.append([types.KeyboardButton(text=button_text)])
     return types.ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
-        input_field_placeholder="Выбери роль оппонента",
+        input_field_placeholder="Выбери вариант роли",
     )
 
 
 def build_scenario_keyboard():
-    """Клавиатура выбора сценария."""
+    """Клавиатура выбора сценария — Вариант 1..10."""
+    global SCENARIO_BUTTONS
+    SCENARIO_BUTTONS = {}
     buttons = []
-    for scenario_name in SCENARIOS.keys():
-        buttons.append([types.KeyboardButton(text=scenario_name)])
+    for i, scenario_name in enumerate(SCENARIOS.keys(), start=1):
+        button_text = f"Вариант {i}"
+        SCENARIO_BUTTONS[button_text] = scenario_name
+        buttons.append([types.KeyboardButton(text=button_text)])
     return types.ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
-        input_field_placeholder="Выбери сценарий",
+        input_field_placeholder="Выбери вариант сценария",
     )
 
 
 def build_goal_keyboard():
-    """Клавиатура выбора цели."""
+    """Клавиатура выбора цели — Вариант 1, Вариант 2, Вариант 3."""
+    global GOAL_BUTTONS
+    GOAL_BUTTONS = {}
     buttons = []
-    for goal_name in GOALS.keys():
-        buttons.append([types.KeyboardButton(text=goal_name)])
+    for i, goal_name in enumerate(GOALS.keys(), start=1):
+        button_text = f"Вариант {i}"
+        GOAL_BUTTONS[button_text] = goal_name
+        buttons.append([types.KeyboardButton(text=button_text)])
     return types.ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
-        input_field_placeholder="Выбери свою цель",
+        input_field_placeholder="Выбери вариант цели",
     )
 
 
@@ -89,8 +104,8 @@ async def start_command(message: types.Message, state: FSMContext):
 
     # Формируем текст с описанием ролей
     roles_text = "🎭 <b>Шаг 1/3: Выбери роль оппонента</b>\n\n"
-    for role_name, role_data in ROLES.items():
-        roles_text += f"<b>{role_name}</b>\n{role_data['description']}\n\n"
+    for i, (role_name, role_data) in enumerate(ROLES.items(), start=1):
+        roles_text += f"<b>Вариант {i}: {role_name}</b>\n{role_data['description']}\n\n"
 
     await message.answer(
         "👋 <b>Привет!</b> Я — тренажёр деловых переговоров с игровой механикой скрытых целей.\n\n"
@@ -105,24 +120,25 @@ async def start_command(message: types.Message, state: FSMContext):
 @dp.message(GameSetup.waiting_for_role)
 async def process_role(message: types.Message, state: FSMContext):
     """Обработка выбора роли."""
-    role_name = message.text
+    button_text = message.text
 
-    if role_name not in ROLES:
+    if button_text not in ROLE_BUTTONS:
         await message.answer(
-            "Пожалуйста, выбери роль с помощью кнопок ниже.",
+            "Пожалуйста, выбери вариант с помощью кнопок ниже.",
             reply_markup=build_role_keyboard(),
         )
         return
 
+    role_name = ROLE_BUTTONS[button_text]
     await state.update_data(role_name=role_name)
 
     # Формируем текст с описанием сценариев
     scenarios_text = f"✅ <b>Роль оппонента:</b> {role_name}\n\n"
     scenarios_text += "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
-    for name, data in SCENARIOS.items():
+    for i, (name, data) in enumerate(SCENARIOS.items(), start=1):
         context = data["context"].replace("Контекст: ", "")
-        preview = context[:120].rsplit(".", 1)[0] + "."
-        scenarios_text += f"<b>{name}</b>\n{preview}\n\n"
+        preview = context[:150].rsplit(".", 1)[0] + "."
+        scenarios_text += f"<b>Вариант {i}: {name}</b>\n{preview}\n\n"
 
     await message.answer(
         scenarios_text,
@@ -135,22 +151,23 @@ async def process_role(message: types.Message, state: FSMContext):
 @dp.message(GameSetup.waiting_for_scenario)
 async def process_scenario(message: types.Message, state: FSMContext):
     """Обработка выбора сценария."""
-    scenario_name = message.text
+    button_text = message.text
 
-    if scenario_name not in SCENARIOS:
+    if button_text not in SCENARIO_BUTTONS:
         await message.answer(
-            "Пожалуйста, выбери сценарий с помощью кнопок ниже.",
+            "Пожалуйста, выбери вариант с помощью кнопок ниже.",
             reply_markup=build_scenario_keyboard(),
         )
         return
 
+    scenario_name = SCENARIO_BUTTONS[button_text]
     await state.update_data(scenario_name=scenario_name)
 
     # Формируем текст с описанием целей
     goals_text = f"✅ <b>Сценарий:</b> {scenario_name}\n\n"
     goals_text += "🎯 <b>Шаг 3/3: Выбери свою основную цель</b>\n\n"
-    for goal_name, goal_data in GOALS.items():
-        goals_text += f"<b>{goal_name}</b>\n{goal_data['description']}\n\n"
+    for i, (goal_name, goal_data) in enumerate(GOALS.items(), start=1):
+        goals_text += f"<b>Вариант {i}: {goal_name}</b>\n{goal_data['description']}\n\n"
 
     await message.answer(
         goals_text,
@@ -163,14 +180,16 @@ async def process_scenario(message: types.Message, state: FSMContext):
 @dp.message(GameSetup.waiting_for_goal)
 async def process_goal(message: types.Message, state: FSMContext):
     """Обработка выбора цели и запуск игры."""
-    goal_name = message.text
+    button_text = message.text
 
-    if goal_name not in GOALS:
+    if button_text not in GOAL_BUTTONS:
         await message.answer(
-            "Пожалуйста, выбери цель с помощью кнопок ниже.",
+            "Пожалуйста, выбери вариант с помощью кнопок ниже.",
             reply_markup=build_goal_keyboard(),
         )
         return
+
+    goal_name = GOAL_BUTTONS[button_text]
 
     # Получаем все сохранённые данные
     user_data = await state.get_data()
