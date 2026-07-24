@@ -20,6 +20,7 @@ from deepseek_client import get_ai_response
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Прокси для Telegram API (только если PROXY_URL задан)
 if config.PROXY_URL:
     session = AiohttpSession(proxy=config.PROXY_URL)
 else:
@@ -37,16 +38,16 @@ user_game_data: dict[int, dict] = {}
 # === Вспомогательные функции для клавиатур ===
 
 def build_role_keyboard():
-    """Клавиатура выбора роли оппонента."""
+    """Клавиатура выбора роли оппонента — ТОЛЬКО названия ролей."""
     buttons = []
-    for role_name, role_data in ROLES.items():
-        # Показываем краткое описание на кнопке
-        short_desc = role_data["description"][:80] + "..."
-        buttons.append([types.KeyboardButton(text=f"{role_name}")])
+    for role_name in ROLES.keys():
+        # Используем короткое имя (без описания в скобках — оно будет в тексте)
+        buttons.append([types.KeyboardButton(text=role_name)])
     return types.ReplyKeyboardMarkup(
         keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
+        input_field_placeholder="Выбери роль оппонента",
     )
 
 
@@ -59,6 +60,7 @@ def build_scenario_keyboard():
         keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
+        input_field_placeholder="Выбери сценарий",
     )
 
 
@@ -71,6 +73,7 @@ def build_goal_keyboard():
         keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
+        input_field_placeholder="Выбери свою цель",
     )
 
 
@@ -79,7 +82,6 @@ def build_goal_keyboard():
 @dp.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext):
     """Начало — Шаг 1: выбор роли оппонента."""
-    # Сбрасываем всё, если была предыдущая игра
     user_id = message.from_user.id
     if user_id in user_messages:
         del user_messages[user_id]
@@ -87,20 +89,15 @@ async def start_command(message: types.Message, state: FSMContext):
         del user_game_data[user_id]
 
     # Формируем текст с описанием ролей
-    roles_text = "🎭 *Шаг 1/3: Выбери роль оппонента:*\n\n"
+    roles_text = "🎭 <b>Шаг 1/3: Выбери роль оппонента</b>\n\n"
     for role_name, role_data in ROLES.items():
-        roles_text += f"• *{role_name}* — {role_data['description']}\n\n"
+        roles_text += f"<b>{role_name}</b>\n{role_data['description']}\n\n"
 
     await message.answer(
-        "👋 Привет! Я — тренажёр деловых переговоров с игровой механикой скрытых целей.\n\n"
-        "🔹 Ты выбираешь роль оппонента, сценарий и свою цель.\n"
-        "🔹 Ты получишь скрытую цель — дополнительную задачу.\n"
-        "🔹 Оппонент тоже будет иметь скрытую цель (ты о ней не узнаешь до анализа).\n"
-        "🔹 Веди диалог, а по команде /stop получишь детальный разбор.\n\n"
-        "📖 Подробнее — /help\n\n"
-        "А теперь настроим игру!\n\n"
+        "👋 <b>Привет!</b> Я — тренажёр деловых переговоров с игровой механикой скрытых целей.\n\n"
+        "Сейчас мы настроим игру.\n\n"
         + roles_text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=build_role_keyboard(),
     )
     await state.set_state(GameSetup.waiting_for_role)
@@ -112,22 +109,26 @@ async def process_role(message: types.Message, state: FSMContext):
     role_name = message.text
 
     if role_name not in ROLES:
-        await message.answer("Пожалуйста, выбери роль из списка кнопок.")
+        await message.answer(
+            "Пожалуйста, выбери роль с помощью кнопок ниже.",
+            reply_markup=build_role_keyboard(),
+        )
         return
 
     await state.update_data(role_name=role_name)
 
     # Формируем текст с описанием сценариев
-    scenarios_text = f"✅ Роль оппонента: *{role_name}*\n\n"
-    scenarios_text += "📋 *Шаг 2/3: Выбери сценарий:*\n\n"
+    scenarios_text = f"✅ <b>Роль оппонента:</b> {role_name}\n\n"
+    scenarios_text += "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
     for name, data in SCENARIOS.items():
-        # Показываем первые 100 символов контекста как подсказку
-        preview = data["context"][:100].replace("Контекст: ", "") + "..."
-        scenarios_text += f"• *{name}* — {preview}\n\n"
+        context = data["context"].replace("Контекст: ", "")
+        # Берём первые 120 символов контекста как краткое описание
+        preview = context[:120].rsplit(".", 1)[0] + "."
+        scenarios_text += f"<b>{name}</b>\n{preview}\n\n"
 
     await message.answer(
         scenarios_text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=build_scenario_keyboard(),
     )
     await state.set_state(GameSetup.waiting_for_scenario)
@@ -139,20 +140,23 @@ async def process_scenario(message: types.Message, state: FSMContext):
     scenario_name = message.text
 
     if scenario_name not in SCENARIOS:
-        await message.answer("Пожалуйста, выбери сценарий из списка кнопок.")
+        await message.answer(
+            "Пожалуйста, выбери сценарий с помощью кнопок ниже.",
+            reply_markup=build_scenario_keyboard(),
+        )
         return
 
     await state.update_data(scenario_name=scenario_name)
 
     # Формируем текст с описанием целей
-    goals_text = f"✅ Сценарий: *{scenario_name}*\n\n"
-    goals_text += "🎯 *Шаг 3/3: Выбери свою основную цель:*\n\n"
+    goals_text = f"✅ <b>Сценарий:</b> {scenario_name}\n\n"
+    goals_text += "🎯 <b>Шаг 3/3: Выбери свою основную цель</b>\n\n"
     for goal_name, goal_data in GOALS.items():
-        goals_text += f"• *{goal_name}* — {goal_data['description']}\n\n"
+        goals_text += f"<b>{goal_name}</b>\n{goal_data['description']}\n\n"
 
     await message.answer(
         goals_text,
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=build_goal_keyboard(),
     )
     await state.set_state(GameSetup.waiting_for_goal)
@@ -164,7 +168,10 @@ async def process_goal(message: types.Message, state: FSMContext):
     goal_name = message.text
 
     if goal_name not in GOALS:
-        await message.answer("Пожалуйста, выбери цель из списка кнопок.")
+        await message.answer(
+            "Пожалуйста, выбери цель с помощью кнопок ниже.",
+            reply_markup=build_goal_keyboard(),
+        )
         return
 
     # Получаем все сохранённые данные
@@ -203,13 +210,13 @@ async def process_goal(message: types.Message, state: FSMContext):
     )
 
     await message.answer(
-        "🎭 *Игра начинается!*\n\n"
-        f"• Оппонент: *{role_name}*\n"
-        f"• Сценарий: *{scenario_name}*\n"
-        f"• Твоя цель: *{goal_name}*\n\n"
+        "🎭 <b>Игра начинается!</b>\n\n"
+        f"• Оппонент: <b>{role_name}</b>\n"
+        f"• Сценарий: <b>{scenario_name}</b>\n"
+        f"• Твоя цель: <b>{goal_name}</b>\n\n"
         "Сейчас оппонент представится и выдаст твою скрытую цель. Поехали! 🚀\n\n"
         "(В любой момент отправь /stop для завершения и анализа)",
-        parse_mode="Markdown",
+        parse_mode="HTML",
         reply_markup=types.ReplyKeyboardRemove(),
     )
 
@@ -293,6 +300,41 @@ async def finish_game(message: types.Message, state: FSMContext):
     logger.info(f"Пользователь {user_id} завершил игру")
 
 
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    """Справка по боту."""
+    help_text = (
+        "🎯 <b>Business Negotiation Trainer</b> — тренажёр деловых переговоров с ИИ-оппонентом.\n\n"
+        "<b>Как играть:</b>\n"
+        "1. Отправь /start для начала\n"
+        "2. Пройди 3 шага настройки:\n"
+        "   • Выбери роль оппонента (характер и тактику)\n"
+        "   • Выбери сценарий переговоров\n"
+        "   • Выбери свою основную цель\n"
+        "3. После запуска ты получишь <b>скрытую цель</b> — дополнительную задачу, "
+        "которую нужно выполнить незаметно для оппонента\n"
+        "4. Веди диалог как в реальных переговорах\n"
+        "5. Отправь /stop для завершения и <b>полного анализа</b>\n\n"
+        "<b>Что в анализе:</b>\n"
+        "• Достиг ли ты основной цели\n"
+        "• Достиг ли ты скрытой цели (и раскрыл ли её оппонент)\n"
+        "• Какую скрытую цель преследовал оппонент\n"
+        "• Ключевой момент переговоров\n"
+        "• Твои точки уязвимости\n"
+        "• Рекомендации по улучшению\n\n"
+        "<b>Роли оппонента:</b>\n"
+        "• <b>Дмитрий</b> — требовательный Заказчик, давит статусом\n"
+        "• <b>Виктор</b> — стратегический Топ-менеджер, задаёт неудобные вопросы\n"
+        "• <b>Сергей</b> — конкурирующий РП, переводит стрелки\n\n"
+        "<b>Сценарии:</b> срыв сроков, провал на проде, перехват ресурсов, "
+        "технический долг, обвинение в некомпетентности и другие (всего 10)\n\n"
+        "<b>Цели:</b> отстоять границы, принять решение, удержать позицию под давлением\n\n"
+        "Удачи в переговорах! 💼",
+        parse_mode="HTML",
+    )
+    await message.answer(help_text)
+
+
 @dp.message(Command("stop"))
 async def stop_anywhere(message: types.Message, state: FSMContext):
     """Обработка /stop в любом состоянии."""
@@ -312,39 +354,6 @@ async def stop_anywhere(message: types.Message, state: FSMContext):
     else:
         await message.answer("Нет активной игры. Отправь /start")
 
-@dp.message(Command("help"))
-async def help_command(message: types.Message):
-    """Справка по боту."""
-    help_text = (
-        "🎯 *Business Negotiation Trainer* — тренажёр деловых переговоров с ИИ-оппонентом.\n\n"
-        "*Как играть:*\n"
-        "1\\. Отправь /start для начала\n"
-        "2\\. Пройди 3 шага настройки:\n"
-        "   • Выбери роль оппонента \\(характер и тактику\\)\n"
-        "   • Выбери сценарий переговоров\n"
-        "   • Выбери свою основную цель\n"
-        "3\\. После запуска ты получишь *скрытую цель* — дополнительную задачу, "
-        "которую нужно выполнить незаметно для оппонента\n"
-        "4\\. Веди диалог как в реальных переговорах\n"
-        "5\\. Отправь /stop в любой момент для завершения и *полного анализа*\n\n"
-        "*Что в анализе:*\n"
-        "• Достиг ли ты основной цели\n"
-        "• Достиг ли ты скрытой цели \\(и раскрыл ли её оппонент\\)\n"
-        "• Какую скрытую цель преследовал оппонент\n"
-        "• Ключевой момент переговоров\n"
-        "• Твои точки уязвимости\n"
-        "• Рекомендации по улучшению\n\n"
-        "*Роли оппонента:*\n"
-        "• *Дмитрий* — требовательный Заказчик, давит статусом\n"
-        "• *Виктор* — стратегический Топ\\-менеджер, задаёт неудобные вопросы\n"
-        "• *Сергей* — конкурирующий РП, переводит стрелки\n\n"
-        "*Сценарии:* срыв сроков, провал на проде, перехват ресурсов, "
-        "технический долг, обвинение в некомпетентности и другие \\(всего 10\\)\n\n"
-        "*Цели:* отстоять границы, принять решение, удержать позицию под давлением\n\n"
-        "Удачи в переговорах\\! 💼",
-        parse_mode:="MarkdownV2",
-    )
-    await message.answer(help_text)
 
 @dp.message()
 async def unexpected_message(message: types.Message):
