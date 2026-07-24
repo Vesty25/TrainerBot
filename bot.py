@@ -38,10 +38,9 @@ user_game_data: dict[int, dict] = {}
 # === Вспомогательные функции для клавиатур ===
 
 def build_role_keyboard():
-    """Клавиатура выбора роли оппонента — ТОЛЬКО названия ролей."""
+    """Клавиатура выбора роли оппонента."""
     buttons = []
     for role_name in ROLES.keys():
-        # Используем короткое имя (без описания в скобках — оно будет в тексте)
         buttons.append([types.KeyboardButton(text=role_name)])
     return types.ReplyKeyboardMarkup(
         keyboard=buttons,
@@ -122,7 +121,6 @@ async def process_role(message: types.Message, state: FSMContext):
     scenarios_text += "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
     for name, data in SCENARIOS.items():
         context = data["context"].replace("Контекст: ", "")
-        # Берём первые 120 символов контекста как краткое описание
         preview = context[:120].rsplit(".", 1)[0] + "."
         scenarios_text += f"<b>{name}</b>\n{preview}\n\n"
 
@@ -292,8 +290,7 @@ async def finish_game(message: types.Message, state: FSMContext):
         del user_game_data[user_id]
 
     await message.answer(
-        "🎉 Игра окончена! Хочешь попробовать снова с другими настройками? "
-        "Отправь /start",
+        "🎉 Игра окончена! Хочешь попробовать снова с другими настройками? Отправь /start",
         reply_markup=types.ReplyKeyboardRemove(),
     )
 
@@ -329,10 +326,9 @@ async def help_command(message: types.Message):
         "<b>Сценарии:</b> срыв сроков, провал на проде, перехват ресурсов, "
         "технический долг, обвинение в некомпетентности и другие (всего 10)\n\n"
         "<b>Цели:</b> отстоять границы, принять решение, удержать позицию под давлением\n\n"
-        "Удачи в переговорах! 💼",
-        parse_mode="HTML",
+        "Удачи в переговорах! 💼"
     )
-    await message.answer(help_text)
+    await message.answer(help_text, parse_mode="HTML")
 
 
 @dp.message(Command("stop"))
