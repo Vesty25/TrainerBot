@@ -20,10 +20,10 @@ from deepseek_client import get_ai_response
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Прокси для Telegram (если нужен). Если VPN системный — убери proxy
-session = AiohttpSession(
-    proxy="http://127.0.0.1:10809"  # ← замени на свой HTTP-порт или убери строку
-)
+if config.PROXY_URL:
+    session = AiohttpSession(proxy=config.PROXY_URL)
+else:
+    session = AiohttpSession()
 
 bot = Bot(token=config.TELEGRAM_BOT_TOKEN, session=session)
 dp = Dispatcher(storage=MemoryStorage())
