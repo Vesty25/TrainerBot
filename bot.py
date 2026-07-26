@@ -34,11 +34,33 @@ dp = Dispatcher(storage=MemoryStorage())
 user_messages: dict[int, list[dict]] = {}
 # Хранилище параметров игры
 user_game_data: dict[int, dict] = {}
+# Счётчик реплик пользователя в диалоге
+user_reply_count: dict[int, int] = {}
 
 # Сопоставление кнопок и значений
 ROLE_BUTTONS = {}
 SCENARIO_BUTTONS = {}
 GOAL_BUTTONS = {}
+
+
+# === Клавиатуры ===
+
+def get_start_keyboard():
+    """Клавиатура с кнопкой Старт (для приветствия и после прерывания)."""
+    return types.ReplyKeyboardMarkup(
+        keyboard=[[types.KeyboardButton(text="🚀 Старт")]],
+        resize_keyboard=True,
+        input_field_placeholder="Нажми Старт, чтобы начать",
+    )
+
+
+def get_stop_keyboard():
+    """Клавиатура с кнопкой Завершить диалог (показывается во время диалога)."""
+    return types.ReplyKeyboardMarkup(
+        keyboard=[[types.KeyboardButton(text="🛑 Завершить диалог")]],
+        resize_keyboard=True,
+        input_field_placeholder="Нажми, чтобы завершить диалог",
+    )
 
 
 def build_role_keyboard():
@@ -67,11 +89,10 @@ def build_scenario_keyboard():
         button_text = f"Вариант {i}"
         SCENARIO_BUTTONS[button_text] = scenario_name
         buttons.append([types.KeyboardButton(text=button_text)])
-    # Разбиваем на ряды по 2 кнопки для удобства
     rows = []
     for i in range(0, len(buttons), 2):
-        row = buttons[i:i+2]
-        rows.append([btn for sublist in row for btn in sublist])
+        row_buttons = [btn[0] for btn in buttons[i:i+2]]
+        rows.append([types.KeyboardButton(text=text) for text in row_buttons])
     return types.ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -96,6 +117,8 @@ def build_goal_keyboard():
         input_field_placeholder="Нажми на кнопку ниже",
     )
 
+
+# === Тексты ===
 
 def build_role_text():
     """Текст с описанием ролей."""
@@ -132,12 +155,10 @@ def build_goal_text(selected_scenario: str):
 # === Веб-сервер-заглушка для Render ===
 
 async def health_check(request):
-    """Заглушка для Render — отвечает OK на проверку порта."""
     return web.Response(text="OK")
 
 
 async def run_web_server():
-    """Запускает веб-сервер на порту 10000."""
     app = web.Application()
     app.router.add_get("/", health_check)
     runner = web.AppRunner(app)
@@ -147,11 +168,38 @@ async def run_web_server():
     logger.info("Health check server started on port 10000")
 
 
-# === Обработчики ===
+# === Обработчик кнопки Старт (дублирует /start) ===
+
+@dp.message(lambda msg: msg.text == "🚀 Старт")
+async def start_button(message: types.Message, state: FSMContext):
+    """Обработка нажатия на кнопку Старт."""
+    await start_game(message, state)
+
+
+# === Обработчик кнопки Завершить диалог (дублирует /stop в диалоге) ===
+
+@dp.message(lambda msg: msg.text == "🛑 Завершить диалог")
+async def stop_button(message: types.Message, state: FSMContext):
+    """Обработка нажатия на кнопку Завершить диалог."""
+    current_state = await state.get_state()
+    user_id = message.from_user.id
+
+    if current_state == GameSetup.in_dialog.state:
+        await finish_game(message, state)
+    else:
+        await cancel_setup(message, state)
+
+
+# === Основные обработчики ===
 
 @dp.message(Command("start"))
 async def start_command(message: types.Message, state: FSMContext):
-    """Начало — Шаг 1: выбор роли оппонента."""
+    """Команда /start — запуск игры."""
+    await start_game(message, state)
+
+
+async def start_game(message: types.Message, state: FSMContext):
+    """Общая логика запуска игры (используется и для /start, и для кнопки)."""
     user_id = message.from_user.id
 
     await state.clear()
@@ -159,6 +207,8 @@ async def start_command(message: types.Message, state: FSMContext):
         del user_messages[user_id]
     if user_id in user_game_data:
         del user_game_data[user_id]
+    if user_id in user_reply_count:
+        del user_reply_count[user_id]
 
     await message.answer(
         "👋 <b>Привет!</b> Я — тренажёр деловых переговоров.\n\n"
@@ -172,7 +222,6 @@ async def start_command(message: types.Message, state: FSMContext):
 
 @dp.message(StateFilter(GameSetup.waiting_for_role))
 async def process_role(message: types.Message, state: FSMContext):
-    """Обработка выбора роли."""
     button_text = message.text
 
     if button_text not in ROLE_BUTTONS:
@@ -196,7 +245,6 @@ async def process_role(message: types.Message, state: FSMContext):
 
 @dp.message(StateFilter(GameSetup.waiting_for_scenario))
 async def process_scenario(message: types.Message, state: FSMContext):
-    """Обработка выбора сценария."""
     button_text = message.text
 
     if button_text not in SCENARIO_BUTTONS:
@@ -220,7 +268,6 @@ async def process_scenario(message: types.Message, state: FSMContext):
 
 @dp.message(StateFilter(GameSetup.waiting_for_goal))
 async def process_goal(message: types.Message, state: FSMContext):
-    """Обработка выбора цели и запуск игры."""
     button_text = message.text
 
     if button_text not in GOAL_BUTTONS:
@@ -237,7 +284,8 @@ async def process_goal(message: types.Message, state: FSMContext):
     scenario_name = user_data.get("scenario_name")
 
     if not role_name or not scenario_name:
-        await message.answer("⚠️ Что-то пошло не так. Начни заново: /start")
+        await message.answer("⚠️ Что-то пошло не так. Нажми Старт, чтобы начать заново.",
+                             reply_markup=get_start_keyboard())
         await state.clear()
         return
 
@@ -255,6 +303,7 @@ async def process_goal(message: types.Message, state: FSMContext):
     user_messages[user_id] = [
         {"role": "system", "content": system_prompt}
     ]
+    user_reply_count[user_id] = 0
 
     user_game_data[user_id] = {
         "role_name": role_name,
@@ -273,9 +322,9 @@ async def process_goal(message: types.Message, state: FSMContext):
         f"• Сценарий: <b>{scenario_name}</b>\n"
         f"• Твоя цель: <b>{goal_name}</b>\n\n"
         "Сейчас оппонент начнёт диалог. Поехали! 🚀\n\n"
-        "(В любой момент отправь /stop для завершения и анализа)",
+        "Для завершения нажми кнопку ниже или отправь /stop",
         parse_mode="HTML",
-        reply_markup=types.ReplyKeyboardRemove(),
+        reply_markup=get_stop_keyboard(),
     )
 
     user_messages[user_id].append({
@@ -293,17 +342,26 @@ async def process_goal(message: types.Message, state: FSMContext):
 
 @dp.message(StateFilter(GameSetup.in_dialog))
 async def handle_dialog_message(message: types.Message, state: FSMContext):
-    """Обработка сообщений в режиме диалога."""
     user_id = message.from_user.id
 
+    # Проверяем кнопку завершения
+    if message.text == "🛑 Завершить диалог":
+        await finish_game(message, state)
+        return
+
+    # Проверяем команду /stop
     if message.text == "/stop":
         await finish_game(message, state)
         return
 
     if user_id not in user_messages:
-        await message.answer("⚠️ Диалог не найден. Начни заново: /start")
+        await message.answer("⚠️ Диалог не найден. Нажми Старт, чтобы начать заново.",
+                             reply_markup=get_start_keyboard())
         await state.clear()
         return
+
+    # Увеличиваем счётчик реплик пользователя
+    user_reply_count[user_id] = user_reply_count.get(user_id, 0) + 1
 
     user_messages[user_id].append({"role": "user", "content": message.text})
 
@@ -315,12 +373,13 @@ async def handle_dialog_message(message: types.Message, state: FSMContext):
 
 
 async def finish_game(message: types.Message, state: FSMContext):
-    """Завершение игры и запрос анализа."""
+    """Завершение игры с анализом, только если был хотя бы один ответ пользователя."""
     user_id = message.from_user.id
+    reply_count = user_reply_count.get(user_id, 0)
 
-    if user_id not in user_messages:
-        await message.answer("⚠️ Нет активного диалога для анализа.")
-        await state.clear()
+    if user_id not in user_messages or reply_count == 0:
+        # Диалог не был начат или пользователь не написал ни одной реплики
+        await cancel_setup(message, state)
         return
 
     await message.answer("🛑 Диалог завершён. Запрашиваю анализ игры...")
@@ -340,9 +399,33 @@ async def finish_game(message: types.Message, state: FSMContext):
         del user_messages[user_id]
     if user_id in user_game_data:
         del user_game_data[user_id]
+    if user_id in user_reply_count:
+        del user_reply_count[user_id]
 
-    await message.answer("🎉 Игра окончена! Хочешь попробовать снова? Отправь /start")
-    logger.info(f"Пользователь {user_id} завершил игру")
+    await message.answer(
+        "🎉 Игра окончена! Хочешь попробовать снова?",
+        reply_markup=get_start_keyboard(),
+    )
+    logger.info(f"Пользователь {user_id} завершил игру с анализом")
+
+
+async def cancel_setup(message: types.Message, state: FSMContext):
+    """Прерывание игры без анализа (на этапе настройки или сразу после старта без реплик)."""
+    user_id = message.from_user.id
+
+    await state.clear()
+    if user_id in user_messages:
+        del user_messages[user_id]
+    if user_id in user_game_data:
+        del user_game_data[user_id]
+    if user_id in user_reply_count:
+        del user_reply_count[user_id]
+
+    await message.answer(
+        "🔄 Диалог прерван. Для начала диалога нажмите кнопку ниже.",
+        reply_markup=get_start_keyboard(),
+    )
+    logger.info(f"Пользователь {user_id} прервал игру без анализа")
 
 
 @dp.message(Command("help"))
@@ -350,10 +433,10 @@ async def help_command(message: types.Message):
     help_text = (
         "🎯 <b>Business Negotiation Trainer</b>\n\n"
         "<b>Как играть:</b>\n"
-        "1. /start — начать новую игру\n"
+        "1. Нажми <b>Старт</b> для начала\n"
         "2. Нажимай на кнопки, чтобы выбрать роль, сценарий и цель\n"
         "3. Веди диалог с ИИ-оппонентом\n"
-        "4. /stop — завершить и получить анализ\n\n"
+        "4. Нажми <b>Завершить диалог</b> для остановки и получения анализа\n\n"
         "Удачи в переговорах! 💼"
     )
     await message.answer(help_text, parse_mode="HTML")
@@ -366,20 +449,16 @@ async def stop_anywhere(message: types.Message, state: FSMContext):
 
     if current_state == GameSetup.in_dialog.state:
         await finish_game(message, state)
-        return
-
-    await state.clear()
-    if user_id in user_messages:
-        del user_messages[user_id]
-    if user_id in user_game_data:
-        del user_game_data[user_id]
-
-    await message.answer("🔄 Всё сброшено. Начни заново: /start")
+    else:
+        await cancel_setup(message, state)
 
 
 @dp.message()
 async def unexpected_message(message: types.Message):
-    await message.answer("👋 Отправь /start, чтобы начать игру, или /help для справки.")
+    await message.answer(
+        "👋 Добро пожаловать! Нажмите кнопку ниже, чтобы начать тренировку.",
+        reply_markup=get_start_keyboard(),
+    )
 
 
 async def main():
