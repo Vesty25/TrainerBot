@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import Command, StateFilter
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiohttp import web
 
 import config
 from states import GameSetup
@@ -79,6 +80,24 @@ def get_option_by_number(options_dict: dict, number_str: str):
     return None
 
 
+# === Веб-сервер-заглушка для Render ===
+
+async def health_check(request):
+    """Заглушка: отвечает 'OK' на любой запрос, чтобы Render видел открытый порт."""
+    return web.Response(text="OK")
+
+
+async def run_web_server():
+    """Запускает веб-сервер на порту 10000."""
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 10000)
+    await site.start()
+    logger.info("Health check server started on port 10000")
+
+
 # === Обработчики ===
 
 @dp.message(Command("start"))
@@ -86,7 +105,6 @@ async def start_command(message: types.Message, state: FSMContext):
     """Начало — Шаг 1: выбор роли оппонента."""
     user_id = message.from_user.id
 
-    # Полный сброс всего
     await state.clear()
     if user_id in user_messages:
         del user_messages[user_id]
@@ -161,7 +179,6 @@ async def process_goal(message: types.Message, state: FSMContext):
         )
         return
 
-    # Получаем сохранённые данные
     user_data = await state.get_data()
     role_name = user_data.get("role_name")
     scenario_name = user_data.get("scenario_name")
@@ -171,25 +188,21 @@ async def process_goal(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Извлекаем промпты
     role_prompt = ROLES[role_name]["prompt"]
     scenario_context = SCENARIOS[scenario_name]["context"]
     goal_criteria = GOALS[goal_name]["criteria"]
 
-    # Собираем системный промпт
     system_prompt = build_system_prompt(
         role_prompt=role_prompt,
         scenario_context=scenario_context,
         goal_criteria=goal_criteria,
     )
 
-    # Инициализируем историю диалога
     user_id = message.from_user.id
     user_messages[user_id] = [
         {"role": "system", "content": system_prompt}
     ]
 
-    # Сохраняем параметры игры
     user_game_data[user_id] = {
         "role_name": role_name,
         "scenario_name": scenario_name,
@@ -211,7 +224,6 @@ async def process_goal(message: types.Message, state: FSMContext):
         parse_mode="HTML",
     )
 
-    # Запрашиваем первое сообщение от AI
     user_messages[user_id].append({
         "role": "user",
         "content": "Начни диалог своей первой репликой согласно сценарию и роли."
@@ -239,10 +251,8 @@ async def handle_dialog_message(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    # Добавляем сообщение пользователя
     user_messages[user_id].append({"role": "user", "content": message.text})
 
-    # Получаем ответ AI
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
     ai_response = await get_ai_response(user_messages[user_id])
     user_messages[user_id].append({"role": "assistant", "content": ai_response})
@@ -277,10 +287,7 @@ async def finish_game(message: types.Message, state: FSMContext):
     if user_id in user_game_data:
         del user_game_data[user_id]
 
-    await message.answer(
-        "🎉 Игра окончена! Хочешь попробовать снова? Отправь /start"
-    )
-
+    await message.answer("🎉 Игра окончена! Хочешь попробовать снова? Отправь /start")
     logger.info(f"Пользователь {user_id} завершил игру")
 
 
@@ -318,17 +325,16 @@ async def stop_anywhere(message: types.Message, state: FSMContext):
 
 @dp.message()
 async def unexpected_message(message: types.Message):
-    await message.answer(
-        "👋 Отправь /start, чтобы начать игру, или /help для справки."
-    )
+    await message.answer("👋 Отправь /start, чтобы начать игру, или /help для справки.")
 
 
 async def main():
     logger.info("Бот запускается...")
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    # Запускаем веб-сервер и бота параллельно
+    await asyncio.gather(
+        run_web_server(),
+        dp.start_polling(bot),
+    )
 
 
 if __name__ == "__main__":
