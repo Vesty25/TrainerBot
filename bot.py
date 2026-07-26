@@ -35,11 +35,72 @@ user_messages: dict[int, list[dict]] = {}
 # Хранилище параметров игры
 user_game_data: dict[int, dict] = {}
 
+# Сопоставление кнопок и значений
+ROLE_BUTTONS = {}
+SCENARIO_BUTTONS = {}
+GOAL_BUTTONS = {}
+
+
+def build_role_keyboard():
+    """Клавиатура выбора роли."""
+    global ROLE_BUTTONS
+    ROLE_BUTTONS = {}
+    buttons = []
+    for i, role_name in enumerate(ROLES.keys(), start=1):
+        button_text = f"Вариант {i}"
+        ROLE_BUTTONS[button_text] = role_name
+        buttons.append([types.KeyboardButton(text=button_text)])
+    return types.ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Нажми на кнопку ниже",
+    )
+
+
+def build_scenario_keyboard():
+    """Клавиатура выбора сценария."""
+    global SCENARIO_BUTTONS
+    SCENARIO_BUTTONS = {}
+    buttons = []
+    for i, scenario_name in enumerate(SCENARIOS.keys(), start=1):
+        button_text = f"Вариант {i}"
+        SCENARIO_BUTTONS[button_text] = scenario_name
+        buttons.append([types.KeyboardButton(text=button_text)])
+    # Разбиваем на ряды по 2 кнопки для удобства
+    rows = []
+    for i in range(0, len(buttons), 2):
+        row = buttons[i:i+2]
+        rows.append([btn for sublist in row for btn in sublist])
+    return types.ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Нажми на кнопку ниже",
+    )
+
+
+def build_goal_keyboard():
+    """Клавиатура выбора цели."""
+    global GOAL_BUTTONS
+    GOAL_BUTTONS = {}
+    buttons = []
+    for i, goal_name in enumerate(GOALS.keys(), start=1):
+        button_text = f"Вариант {i}"
+        GOAL_BUTTONS[button_text] = goal_name
+        buttons.append([types.KeyboardButton(text=button_text)])
+    return types.ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Нажми на кнопку ниже",
+    )
+
 
 def build_role_text():
     """Текст с описанием ролей."""
     text = "🎭 <b>Шаг 1/3: Выбери роль оппонента</b>\n\n"
-    text += "Напиши в ответе номер варианта (1, 2 или 3):\n\n"
+    text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
     for i, (role_name, role_data) in enumerate(ROLES.items(), start=1):
         text += f"<b>Вариант {i}: {role_name}</b>\n{role_data['description']}\n\n"
     return text
@@ -49,7 +110,7 @@ def build_scenario_text(selected_role: str):
     """Текст с описанием сценариев."""
     text = f"✅ <b>Роль оппонента:</b> {selected_role}\n\n"
     text += "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
-    text += "Напиши в ответе номер варианта (от 1 до 10):\n\n"
+    text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
     for i, (name, data) in enumerate(SCENARIOS.items(), start=1):
         context = data["context"].replace("Контекст: ", "")
         if len(context) > 150:
@@ -62,28 +123,16 @@ def build_goal_text(selected_scenario: str):
     """Текст с описанием целей."""
     text = f"✅ <b>Сценарий:</b> {selected_scenario}\n\n"
     text += "🎯 <b>Шаг 3/3: Выбери свою основную цель</b>\n\n"
-    text += "Напиши в ответе номер варианта (1, 2 или 3):\n\n"
+    text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
     for i, (goal_name, goal_data) in enumerate(GOALS.items(), start=1):
         text += f"<b>Вариант {i}: {goal_name}</b>\n{goal_data['description']}\n\n"
     return text
 
 
-def get_option_by_number(options_dict: dict, number_str: str):
-    """Получает значение из словаря по номеру (1-based)."""
-    try:
-        num = int(number_str.strip())
-        keys = list(options_dict.keys())
-        if 1 <= num <= len(keys):
-            return keys[num - 1]
-    except ValueError:
-        pass
-    return None
-
-
 # === Веб-сервер-заглушка для Render ===
 
 async def health_check(request):
-    """Заглушка: отвечает 'OK' на любой запрос, чтобы Render видел открытый порт."""
+    """Заглушка для Render — отвечает OK на проверку порта."""
     return web.Response(text="OK")
 
 
@@ -113,9 +162,10 @@ async def start_command(message: types.Message, state: FSMContext):
 
     await message.answer(
         "👋 <b>Привет!</b> Я — тренажёр деловых переговоров.\n\n"
-        "Сейчас мы настроим игру. На каждом шаге просто напиши номер варианта.\n\n"
+        "Сейчас мы настроим игру. На каждом шаге просто нажимай на кнопку.\n\n"
         + build_role_text(),
         parse_mode="HTML",
+        reply_markup=build_role_keyboard(),
     )
     await state.set_state(GameSetup.waiting_for_role)
 
@@ -123,22 +173,23 @@ async def start_command(message: types.Message, state: FSMContext):
 @dp.message(StateFilter(GameSetup.waiting_for_role))
 async def process_role(message: types.Message, state: FSMContext):
     """Обработка выбора роли."""
-    role_name = get_option_by_number(ROLES, message.text)
+    button_text = message.text
 
-    if role_name is None:
+    if button_text not in ROLE_BUTTONS:
         await message.answer(
-            "❌ Пожалуйста, напиши номер варианта (1, 2 или 3).\n\n"
-            + build_role_text(),
-            parse_mode="HTML",
+            "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать роль.",
+            reply_markup=build_role_keyboard(),
         )
         return
 
+    role_name = ROLE_BUTTONS[button_text]
     await state.update_data(role_name=role_name)
     logger.info(f"Пользователь {message.from_user.id} выбрал роль: {role_name}")
 
     await message.answer(
         build_scenario_text(role_name),
         parse_mode="HTML",
+        reply_markup=build_scenario_keyboard(),
     )
     await state.set_state(GameSetup.waiting_for_scenario)
 
@@ -146,22 +197,23 @@ async def process_role(message: types.Message, state: FSMContext):
 @dp.message(StateFilter(GameSetup.waiting_for_scenario))
 async def process_scenario(message: types.Message, state: FSMContext):
     """Обработка выбора сценария."""
-    scenario_name = get_option_by_number(SCENARIOS, message.text)
+    button_text = message.text
 
-    if scenario_name is None:
+    if button_text not in SCENARIO_BUTTONS:
         await message.answer(
-            "❌ Пожалуйста, напиши номер варианта (от 1 до 10).\n\n"
-            + build_scenario_text("..."),
-            parse_mode="HTML",
+            "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать сценарий.",
+            reply_markup=build_scenario_keyboard(),
         )
         return
 
+    scenario_name = SCENARIO_BUTTONS[button_text]
     await state.update_data(scenario_name=scenario_name)
     logger.info(f"Пользователь {message.from_user.id} выбрал сценарий: {scenario_name}")
 
     await message.answer(
         build_goal_text(scenario_name),
         parse_mode="HTML",
+        reply_markup=build_goal_keyboard(),
     )
     await state.set_state(GameSetup.waiting_for_goal)
 
@@ -169,15 +221,16 @@ async def process_scenario(message: types.Message, state: FSMContext):
 @dp.message(StateFilter(GameSetup.waiting_for_goal))
 async def process_goal(message: types.Message, state: FSMContext):
     """Обработка выбора цели и запуск игры."""
-    goal_name = get_option_by_number(GOALS, message.text)
+    button_text = message.text
 
-    if goal_name is None:
+    if button_text not in GOAL_BUTTONS:
         await message.answer(
-            "❌ Пожалуйста, напиши номер варианта (1, 2 или 3).\n\n"
-            + build_goal_text("..."),
-            parse_mode="HTML",
+            "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать цель.",
+            reply_markup=build_goal_keyboard(),
         )
         return
+
+    goal_name = GOAL_BUTTONS[button_text]
 
     user_data = await state.get_data()
     role_name = user_data.get("role_name")
@@ -222,6 +275,7 @@ async def process_goal(message: types.Message, state: FSMContext):
         "Сейчас оппонент начнёт диалог. Поехали! 🚀\n\n"
         "(В любой момент отправь /stop для завершения и анализа)",
         parse_mode="HTML",
+        reply_markup=types.ReplyKeyboardRemove(),
     )
 
     user_messages[user_id].append({
@@ -297,7 +351,7 @@ async def help_command(message: types.Message):
         "🎯 <b>Business Negotiation Trainer</b>\n\n"
         "<b>Как играть:</b>\n"
         "1. /start — начать новую игру\n"
-        "2. Выбери роль, сценарий и цель (напиши номер варианта)\n"
+        "2. Нажимай на кнопки, чтобы выбрать роль, сценарий и цель\n"
         "3. Веди диалог с ИИ-оппонентом\n"
         "4. /stop — завершить и получить анализ\n\n"
         "Удачи в переговорах! 💼"
@@ -330,7 +384,6 @@ async def unexpected_message(message: types.Message):
 
 async def main():
     logger.info("Бот запускается...")
-    # Запускаем веб-сервер и бота параллельно
     await asyncio.gather(
         run_web_server(),
         dp.start_polling(bot),
