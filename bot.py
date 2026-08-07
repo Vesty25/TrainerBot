@@ -21,7 +21,7 @@ from subscription import (
     is_premium, is_test_user, ensure_user_exists,
     update_activity, get_available_roles,
     get_available_scenarios, get_available_goals,
-    add_test_user,
+    add_test_user, has_played_before,
 )
 
 
@@ -44,13 +44,15 @@ user_messages: dict[int, list[dict]] = {}
 user_game_data: dict[int, dict] = {}
 # Счётчик реплик пользователя в диалоге
 user_reply_count: dict[int, int] = {}
+# Хранилище выбранных сообщений для удаления: user_id -> [message_id, ...]
+user_selection_messages: dict[int, list[int]] = {}
 
 # Сопоставление кнопок и значений
 ROLE_BUTTONS = {}
 SCENARIO_BUTTONS = {}
 GOAL_BUTTONS = {}
 
-# ID админов (тех, кто может использовать /admin)
+# ID админов
 ADMIN_USER_IDS = [455307194]  # ← Замени на свой Telegram ID
 
 
@@ -151,7 +153,7 @@ def build_goal_keyboard():
 # === Тексты ===
 
 def build_role_text(user_id: int):
-    """Текст с описанием ролей (фильтруется по подписке)."""
+    """Текст с описанием ролей."""
     available_roles = get_available_roles(user_id, ROLES)
     all_roles = ROLES
     is_prem = is_premium(user_id)
@@ -165,20 +167,16 @@ def build_role_text(user_id: int):
         if role_name in available_roles:
             text += f"<b>Вариант {i}: {role_name}</b>\n{role_data['description']}\n\n"
         else:
-            text += f"🔒 <b>Вариант {i}: {role_name}</b> (Premium)\n"
+            text += f"🔒 <b>Вариант {i}: {role_name}</b>\n"
             text += f"<i>{role_data['description']}</i>\n\n"
-
-    if not is_prem:
-        text += "💎 <i>Роли 4-6 доступны с премиум-подпиской. Нажми «💎 Подписка» в главном меню.</i>\n"
 
     return text
 
 
 def build_scenario_text(selected_role: str, user_id: int):
-    """Текст с описанием сценариев (фильтруется по подписке)."""
+    """Текст с описанием сценариев."""
     available_scenarios = get_available_scenarios(user_id, SCENARIOS)
     all_scenarios = SCENARIOS
-    is_prem = is_premium(user_id)
 
     text = f"✅ <b>Роль оппонента:</b> {selected_role}\n\n"
     text += "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
@@ -194,20 +192,16 @@ def build_scenario_text(selected_role: str, user_id: int):
         if name in available_scenarios:
             text += f"<b>Вариант {i}: {name}</b>\n{context}\n\n"
         else:
-            text += f"🔒 <b>Вариант {i}: {name}</b> (Premium)\n"
+            text += f"🔒 <b>Вариант {i}: {name}</b>\n"
             text += f"<i>{context}</i>\n\n"
-
-    if not is_prem:
-        text += "💎 <i>Сценарии 11-20 доступны с премиум-подпиской. Нажми «💎 Подписка» в главном меню.</i>\n"
 
     return text
 
 
 def build_goal_text(selected_scenario: str, user_id: int):
-    """Текст с описанием целей (фильтруется по подписке)."""
+    """Текст с описанием целей."""
     available_goals = get_available_goals(user_id, GOALS)
     all_goals = GOALS
-    is_prem = is_premium(user_id)
 
     text = f"✅ <b>Сценарий:</b> {selected_scenario}\n\n"
     text += "🎯 <b>Шаг 3/3: Выбери свою основную цель</b>\n\n"
@@ -219,11 +213,53 @@ def build_goal_text(selected_scenario: str, user_id: int):
         if goal_name in available_goals:
             text += f"<b>Вариант {i}: {goal_name}</b>\n{goal_data['description']}\n\n"
         else:
-            text += f"🔒 <b>Вариант {i}: {goal_name}</b> (Premium)\n"
+            text += f"🔒 <b>Вариант {i}: {goal_name}</b>\n"
             text += f"<i>{goal_data['description']}</i>\n\n"
 
+    return text
+
+
+def get_welcome_text(user_id: int, first_time: bool):
+    """Приветственный текст. Разный для новых и вернувшихся."""
+    is_prem = is_premium(user_id)
+
+    if first_time:
+        greeting = "👋 <b>Привет!</b> Я — тренажёр деловых переговоров.\n\n"
+    else:
+        greeting = "👋 <b>С возвращением!</b> Давай сыграем ещё раз.\n\n"
+
+    greeting += "Сейчас мы настроим игру. На каждом шаге просто нажимай на кнопку.\n\n"
+
     if not is_prem:
-        text += "💎 <i>Цели 4-6 доступны с премиум-подпиской. Нажми «💎 Подписка» в главном меню.</i>\n"
+        greeting += (
+            "💎 <b>Хочешь больше?</b>\n"
+            "С премиум-подпиской доступны:\n"
+            "• 6 ролей оппонента (сейчас 3)\n"
+            "• 20 сценариев (сейчас 10)\n"
+            "• 6 целей (сейчас 3)\n"
+            "• Случайная игра\n\n"
+            "Нажми <b>«💎 Подписка»</b> в главном меню.\n\n"
+        )
+
+    greeting += build_role_text(user_id)
+    return greeting
+
+
+def get_final_config_text(role_name: str, scenario_name: str, goal_name: str):
+    """Финальное сообщение с выбранными параметрами."""
+    role_data = ROLES[role_name]
+    scenario_data = SCENARIOS[scenario_name]
+    goal_data = GOALS[goal_name]
+
+    text = "✅ <b>Игра настроена!</b>\n\n"
+    text += f"🎭 <b>Роль оппонента:</b> {role_name}\n"
+    text += f"<i>{role_data['description']}</i>\n\n"
+    text += f"📋 <b>Сценарий:</b> {scenario_name}\n"
+    text += f"<i>{scenario_data['context']}</i>\n\n"
+    text += f"🎯 <b>Цель:</b> {goal_name}\n"
+    text += f"<i>{goal_data['description']}</i>\n\n"
+    text += "Сейчас оппонент начнёт диалог. Поехали! 🚀\n\n"
+    text += "Для завершения нажми кнопку ниже или отправь /stop"
 
     return text
 
@@ -242,6 +278,26 @@ async def run_web_server():
     site = web.TCPSite(runner, "0.0.0.0", 10000)
     await site.start()
     logger.info("Health check server started on port 10000")
+
+
+# === Вспомогательные функции ===
+
+async def delete_selection_messages(message: types.Message, user_id: int):
+    """Удаляет все сообщения с выбором вариантов для пользователя."""
+    if user_id in user_selection_messages:
+        for msg_id in user_selection_messages[user_id]:
+            try:
+                await bot.delete_message(chat_id=message.chat.id, message_id=msg_id)
+            except Exception:
+                pass  # сообщение могло быть уже удалено
+        user_selection_messages[user_id] = []
+
+
+def add_selection_message(user_id: int, message_id: int):
+    """Добавляет ID сообщения в список для последующего удаления."""
+    if user_id not in user_selection_messages:
+        user_selection_messages[user_id] = []
+    user_selection_messages[user_id].append(message_id)
 
 
 # === Обработчики ===
@@ -264,7 +320,6 @@ async def random_game_button(message: types.Message, state: FSMContext):
         )
         return
 
-    # Сбрасываем состояние
     await state.clear()
     if user_id in user_messages:
         del user_messages[user_id]
@@ -283,7 +338,11 @@ async def random_game_button(message: types.Message, state: FSMContext):
         f"роль={role_name}, сценарий={scenario_name}, цель={goal_name}"
     )
 
-    # Запускаем игру
+    # Показываем конфигурацию и запускаем
+    config_text = get_final_config_text(role_name, scenario_name, goal_name)
+    config_msg = await message.answer(config_text, parse_mode="HTML")
+    add_selection_message(user_id, config_msg.message_id)
+
     await launch_game(message, role_name, scenario_name, goal_name, state)
 
 
@@ -293,7 +352,6 @@ async def subscription_button(message: types.Message):
     user_id = message.from_user.id
 
     if is_premium(user_id):
-        # Уже есть подписка — показываем статус
         from database import get_connection
         conn = get_connection()
         cursor = conn.cursor()
@@ -316,7 +374,6 @@ async def subscription_button(message: types.Message):
             reply_markup=get_main_menu_keyboard(user_id),
         )
     else:
-        # Нет подписки — предлагаем оформить
         await message.answer(
             "💎 <b>Премиум-подписка</b>\n\n"
             "С подпиской вы получаете:\n"
@@ -348,6 +405,10 @@ async def start_command(message: types.Message, state: FSMContext):
 async def start_game(message: types.Message, state: FSMContext):
     """Общая логика запуска игры."""
     user_id = message.from_user.id
+
+    # Удаляем предыдущие сообщения с выбором
+    await delete_selection_messages(message, user_id)
+
     await state.clear()
     if user_id in user_messages:
         del user_messages[user_id]
@@ -357,21 +418,19 @@ async def start_game(message: types.Message, state: FSMContext):
         del user_reply_count[user_id]
 
     # Обновляем данные пользователя
-    ensure_user_exists(user_id, message.from_user.username)
+    first_time = ensure_user_exists(user_id, message.from_user.username)
     update_activity(user_id)
 
-    await message.answer(
-        "👋 <b>Привет!</b> Я — тренажёр деловых переговоров.\n\n"
-        "Сейчас мы настроим игру. На каждом шаге просто нажимай на кнопку.\n\n"
-        + build_role_text(user_id),
-        parse_mode="HTML",
-        reply_markup=build_role_keyboard(),
-    )
+    # Показываем приветствие
+    welcome_text = get_welcome_text(user_id, first_time)
+    msg = await message.answer(welcome_text, parse_mode="HTML", reply_markup=build_role_keyboard())
+    add_selection_message(user_id, msg.message_id)
+
     await state.set_state(GameSetup.waiting_for_role)
 
 
 async def launch_game(message: types.Message, role_name: str, scenario_name: str, goal_name: str, state: FSMContext):
-    """Запускает игру с заданными параметрами (используется для обычного и случайного запуска)."""
+    """Запускает игру с заданными параметрами."""
     user_id = message.from_user.id
 
     role_prompt = ROLES[role_name]["prompt"]
@@ -392,16 +451,24 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
         "goal_name": goal_name,
     }
 
-    await message.answer(
-        "🎭 <b>Игра начинается!</b>\n\n"
-        f"• Оппонент: <b>{role_name}</b>\n"
-        f"• Сценарий: <b>{scenario_name}</b>\n"
-        f"• Твоя цель: <b>{goal_name}</b>\n\n"
-        "Сейчас оппонент начнёт диалог. Поехали! 🚀\n\n"
-        "Для завершения нажми кнопку ниже или отправь /stop",
-        parse_mode="HTML",
-        reply_markup=get_stop_keyboard(),
+    # Отмечаем, что пользователь играл
+    from database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET has_played = 1 WHERE user_id = ?",
+        (user_id,)
     )
+    conn.commit()
+    conn.close()
+
+    # Удаляем сообщения с выбором
+    await delete_selection_messages(message, user_id)
+
+    # Отправляем финальную конфигурацию
+    config_text = get_final_config_text(role_name, scenario_name, goal_name)
+    config_msg = await message.answer(config_text, parse_mode="HTML", reply_markup=get_stop_keyboard())
+    add_selection_message(user_id, config_msg.message_id)
 
     user_messages[user_id].append({
         "role": "user",
@@ -421,11 +488,15 @@ async def process_role(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     button_text = message.text
 
+    # Сохраняем ID сообщения пользователя для удаления
+    add_selection_message(user_id, message.message_id)
+
     if button_text not in ROLE_BUTTONS:
-        await message.answer(
+        msg = await message.answer(
             "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать роль.",
             reply_markup=build_role_keyboard(),
         )
+        add_selection_message(user_id, msg.message_id)
         return
 
     role_name = ROLE_BUTTONS[button_text]
@@ -433,21 +504,24 @@ async def process_role(message: types.Message, state: FSMContext):
     # Проверяем доступность роли
     available_roles = get_available_roles(user_id, ROLES)
     if role_name not in available_roles:
-        await message.answer(
+        msg = await message.answer(
             "🔒 Эта роль доступна только с премиум-подпиской.\n"
             "Нажми «💎 Подписка» в главном меню, чтобы оформить.",
             reply_markup=build_role_keyboard(),
         )
+        add_selection_message(user_id, msg.message_id)
         return
 
     await state.update_data(role_name=role_name)
     logger.info(f"Пользователь {user_id} выбрал роль: {role_name}")
 
-    await message.answer(
+    # Сохраняем ID сообщения бота
+    sent_msg = await message.answer(
         build_scenario_text(role_name, user_id),
         parse_mode="HTML",
         reply_markup=build_scenario_keyboard(),
     )
+    add_selection_message(user_id, sent_msg.message_id)
     await state.set_state(GameSetup.waiting_for_scenario)
 
 
@@ -456,33 +530,37 @@ async def process_scenario(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     button_text = message.text
 
+    add_selection_message(user_id, message.message_id)
+
     if button_text not in SCENARIO_BUTTONS:
-        await message.answer(
+        msg = await message.answer(
             "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать сценарий.",
             reply_markup=build_scenario_keyboard(),
         )
+        add_selection_message(user_id, msg.message_id)
         return
 
     scenario_name = SCENARIO_BUTTONS[button_text]
 
-    # Проверяем доступность сценария
     available_scenarios = get_available_scenarios(user_id, SCENARIOS)
     if scenario_name not in available_scenarios:
-        await message.answer(
+        msg = await message.answer(
             "🔒 Этот сценарий доступен только с премиум-подпиской.\n"
             "Нажми «💎 Подписка» в главном меню, чтобы оформить.",
             reply_markup=build_scenario_keyboard(),
         )
+        add_selection_message(user_id, msg.message_id)
         return
 
     await state.update_data(scenario_name=scenario_name)
     logger.info(f"Пользователь {user_id} выбрал сценарий: {scenario_name}")
 
-    await message.answer(
+    sent_msg = await message.answer(
         build_goal_text(scenario_name, user_id),
         parse_mode="HTML",
         reply_markup=build_goal_keyboard(),
     )
+    add_selection_message(user_id, sent_msg.message_id)
     await state.set_state(GameSetup.waiting_for_goal)
 
 
@@ -491,23 +569,26 @@ async def process_goal(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     button_text = message.text
 
+    add_selection_message(user_id, message.message_id)
+
     if button_text not in GOAL_BUTTONS:
-        await message.answer(
+        msg = await message.answer(
             "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать цель.",
             reply_markup=build_goal_keyboard(),
         )
+        add_selection_message(user_id, msg.message_id)
         return
 
     goal_name = GOAL_BUTTONS[button_text]
 
-    # Проверяем доступность цели
     available_goals = get_available_goals(user_id, GOALS)
     if goal_name not in available_goals:
-        await message.answer(
+        msg = await message.answer(
             "🔒 Эта цель доступна только с премиум-подпиской.\n"
             "Нажми «💎 Подписка» в главном меню, чтобы оформить.",
             reply_markup=build_goal_keyboard(),
         )
+        add_selection_message(user_id, msg.message_id)
         return
 
     user_data = await state.get_data()
@@ -597,6 +678,7 @@ async def cancel_setup(message: types.Message, state: FSMContext):
         del user_game_data[user_id]
     if user_id in user_reply_count:
         del user_reply_count[user_id]
+    await delete_selection_messages(message, user_id)
 
     await message.answer(
         "🔄 Диалог прерван. Для начала диалога нажмите кнопку ниже.",
@@ -723,7 +805,7 @@ async def check_user_command(message: types.Message):
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT subscription_expires, created_at, last_activity FROM users WHERE user_id = ?",
+            "SELECT subscription_expires, created_at, last_activity, has_played FROM users WHERE user_id = ?",
             (user_id,)
         )
         row = cursor.fetchone()
@@ -732,11 +814,13 @@ async def check_user_command(message: types.Message):
         expires = row["subscription_expires"] if row and row["subscription_expires"] else "Нет"
         created = row["created_at"] if row else "Нет данных"
         last_act = row["last_activity"] if row and row["last_activity"] else "Нет данных"
+        has_played = "Да" if row and row["has_played"] else "Нет"
 
         await message.answer(
             f"👤 <b>Пользователь:</b> {user_id}\n"
             f"📊 <b>Статус:</b> {status}\n"
             f"📅 <b>Подписка до:</b> {expires}\n"
+            f"🎮 <b>Играл ранее:</b> {has_played}\n"
             f"🕐 <b>Создан:</b> {created}\n"
             f"🕑 <b>Активность:</b> {last_act}",
             parse_mode="HTML",
@@ -765,6 +849,9 @@ async def stats_command(message: types.Message):
     cursor.execute("SELECT COUNT(*) as test FROM users WHERE is_test_user = 1")
     test = cursor.fetchone()["test"]
 
+    cursor.execute("SELECT COUNT(*) as played FROM users WHERE has_played = 1")
+    played = cursor.fetchone()["played"]
+
     conn.close()
 
     await message.answer(
@@ -772,56 +859,10 @@ async def stats_command(message: types.Message):
         f"👥 Всего пользователей: <b>{total}</b>\n"
         f"💎 Премиум: <b>{premium}</b>\n"
         f"🧪 Тестовых: <b>{test}</b>\n"
+        f"🎮 Играли хотя бы раз: <b>{played}</b>\n"
         f"🆓 Бесплатных: <b>{total - premium}</b>",
         parse_mode="HTML",
     )
 
 
-@dp.message(Command("toggle_subscription"))
-async def toggle_subscription_command(message: types.Message):
-    """Включает/выключает режим подписки глобально."""
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-
-    from database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT value FROM settings WHERE key = 'subscription_enabled'")
-    row = cursor.fetchone()
-
-    current = row["value"] if row else "1"
-    new_value = "0" if current == "1" else "1"
-
-    cursor.execute("""
-        INSERT INTO settings (key, value) VALUES ('subscription_enabled', ?)
-        ON CONFLICT(key) DO UPDATE SET value = ?
-    """, (new_value, new_value))
-
-    conn.commit()
-    conn.close()
-
-    status = "✅ ВКЛЮЧЕН" if new_value == "1" else "⛔ ВЫКЛЮЧЕН"
-    await message.answer(f"Режим подписки: {status}")
-
-
-@dp.message()
-async def unexpected_message(message: types.Message):
-    user_id = message.from_user.id
-    await message.answer(
-        "👋 Добро пожаловать! Нажмите кнопку ниже, чтобы начать тренировку.",
-        reply_markup=get_start_keyboard(user_id),
-    )
-
-
-async def main():
-    init_db()
-    logger.info("Бот запускается...")
-    await asyncio.gather(
-        run_web_server(),
-        dp.start_polling(bot),
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+@dp.message
