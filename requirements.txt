@@ -3,3 +3,4 @@ openai>=1.0
 python-dotenv>=1.0
 httpx>=0.25
 aiohttp-socks>=0.8
+libsql-experimental>=0.1.0
