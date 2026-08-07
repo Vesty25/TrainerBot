@@ -24,11 +24,8 @@ def is_subscription_enabled() -> bool:
 
 def is_premium(user_id: int) -> bool:
     """Проверяет, есть ли у пользователя активная премиум-подписка."""
-    # Если подписка выключена глобально — все premium
     if not is_subscription_enabled():
         return True
-
-    # Тестовые пользователи — вечная подписка
     if is_test_user(user_id):
         return True
 
@@ -100,7 +97,6 @@ def ensure_user_exists(user_id: int, username: str = None) -> bool:
     row = cursor.fetchone()
 
     if row:
-        # Пользователь существует — обновляем username
         if username:
             cursor.execute(
                 "UPDATE users SET username = ? WHERE user_id = ?",
@@ -108,16 +104,15 @@ def ensure_user_exists(user_id: int, username: str = None) -> bool:
             )
         conn.commit()
         conn.close()
-        return row["has_played"] == 0  # True если ещё не играл (т.е. "новый")
+        return row["has_played"] == 0
     else:
-        # Новый пользователь
         cursor.execute("""
-            INSERT INTO users (user_id, username, has_played)
-            VALUES (?, ?, 0)
+            INSERT INTO users (user_id, username, has_played, games_this_month)
+            VALUES (?, ?, 0, 0)
         """, (user_id, username))
         conn.commit()
         conn.close()
-        return True  # новый пользователь
+        return True
 
 
 def update_activity(user_id: int):
@@ -132,22 +127,62 @@ def update_activity(user_id: int):
     conn.close()
 
 
+def get_games_this_month(user_id: int) -> int:
+    """Возвращает количество игр пользователя в текущем месяце."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT games_this_month FROM users WHERE user_id = ?",
+        (user_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row["games_this_month"] if row else 0
+
+
+def increment_games_this_month(user_id: int):
+    """Увеличивает счётчик игр в текущем месяце."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET games_this_month = games_this_month + 1
+        WHERE user_id = ?
+    """, (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def can_play(user_id: int, max_games: int = 5) -> bool:
+    """Проверяет, может ли пользователь играть (не превышен лимит)."""
+    if is_premium(user_id):
+        return True
+    games = get_games_this_month(user_id)
+    return games < max_games
+
+
 def get_available_roles(user_id: int, all_roles: dict) -> dict:
-    """Возвращает роли, доступные пользователю."""
     if is_premium(user_id):
         return all_roles
     return {k: v for k, v in all_roles.items() if not v.get("premium", False)}
 
 
 def get_available_scenarios(user_id: int, all_scenarios: dict) -> dict:
-    """Возвращает сценарии, доступные пользователю."""
     if is_premium(user_id):
         return all_scenarios
     return {k: v for k, v in all_scenarios.items() if not v.get("premium", False)}
 
 
 def get_available_goals(user_id: int, all_goals: dict) -> dict:
-    """Возвращает цели, доступные пользователю."""
     if is_premium(user_id):
         return all_goals
     return {k: v for k, v in all_goals.items() if not v.get("premium", False)}
+
+
+def is_first_game(user_id: int) -> bool:
+    """Проверяет, первая ли это игра у пользователя."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT has_played FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None and row["has_played"] == 0
