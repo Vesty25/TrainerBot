@@ -855,4 +855,188 @@ async def admin_command(message: types.Message):
     await message.answer(
         "🔧 <b>Админ-панель</b>\n\n"
         "<b>Команды:</b>\n"
-        "/add_test &lt;user_id&gt; — добавить тестов
+        "/add_test &lt;user_id&gt; — добавить тестового пользователя\n"
+        "/remove_test &lt;user_id&gt; — убрать тестового\n"
+        "/add_sub &lt;user_id&gt; &lt;дней&gt; — добавить подписку\n"
+        "/check_user &lt;user_id&gt; — проверить статус\n"
+        "/stats — статистика\n"
+        "/toggle_subscription — вкл/выкл режим подписки",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("add_test"))
+async def add_test_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+    try:
+        user_id = int(message.text.split()[1])
+        add_test_user(user_id)
+        await message.answer(f"✅ Пользователь {user_id} добавлен как тестовый (вечная премиум-подписка).")
+    except (IndexError, ValueError):
+        await message.answer("❌ Использование: /add_test <user_id>")
+
+
+@dp.message(Command("remove_test"))
+async def remove_test_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+    try:
+        from database import get_connection
+        user_id = int(message.text.split()[1])
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET is_test_user = 0 WHERE user_id = ?", (user_id,))
+        conn.commit()
+        conn.close()
+        await message.answer(f"✅ Тестовый статус пользователя {user_id} убран.")
+    except (IndexError, ValueError):
+        await message.answer("❌ Использование: /remove_test <user_id>")
+
+
+@dp.message(Command("add_sub"))
+async def add_sub_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+    try:
+        from subscription import add_subscription
+        parts = message.text.split()
+        user_id = int(parts[1])
+        days = int(parts[2])
+        add_subscription(user_id, days)
+        await message.answer(f"✅ Подписка пользователя {user_id} продлена на {days} дней.")
+    except (IndexError, ValueError):
+        await message.answer("❌ Использование: /add_sub <user_id> <дней>")
+
+
+@dp.message(Command("check_user"))
+async def check_user_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+    try:
+        from database import get_connection
+        user_id = int(message.text.split()[1])
+        premium = is_premium(user_id)
+        test = is_test_user(user_id)
+
+        status = "💎 Премиум" if premium else "🆓 Бесплатный"
+        if test:
+            status += " (тестовый — вечная подписка)"
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT subscription_expires, created_at, last_activity, has_played, games_this_month "
+            "FROM users WHERE user_id = ?",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        expires = row["subscription_expires"] if row and row["subscription_expires"] else "Нет"
+        created = row["created_at"] if row else "Нет данных"
+        last_act = row["last_activity"] if row and row["last_activity"] else "Нет данных"
+        has_played = "Да" if row and row["has_played"] else "Нет"
+        games = row["games_this_month"] if row else 0
+
+        await message.answer(
+            f"👤 <b>Пользователь:</b> {user_id}\n"
+            f"📊 <b>Статус:</b> {status}\n"
+            f"📅 <b>Подписка до:</b> {expires}\n"
+            f"🎮 <b>Играл ранее:</b> {has_played}\n"
+            f"🔢 <b>Игр в этом месяце:</b> {games}\n"
+            f"🕐 <b>Создан:</b> {created}\n"
+            f"🕑 <b>Активность:</b> {last_act}",
+            parse_mode="HTML",
+        )
+    except (IndexError, ValueError):
+        await message.answer("❌ Использование: /check_user <user_id>")
+
+
+@dp.message(Command("stats"))
+async def stats_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+    from database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) as total FROM users")
+    total = cursor.fetchone()["total"]
+
+    cursor.execute(
+        "SELECT COUNT(*) as premium FROM users "
+        "WHERE subscription_expires > datetime('now') OR is_test_user = 1"
+    )
+    premium = cursor.fetchone()["premium"]
+
+    cursor.execute("SELECT COUNT(*) as test FROM users WHERE is_test_user = 1")
+    test = cursor.fetchone()["test"]
+
+    cursor.execute("SELECT COUNT(*) as played FROM users WHERE has_played = 1")
+    played = cursor.fetchone()["played"]
+
+    cursor.execute("SELECT SUM(games_this_month) as total_games FROM users")
+    total_games = cursor.fetchone()["total_games"] or 0
+
+    conn.close()
+
+    await message.answer(
+        f"📊 <b>Статистика</b>\n\n"
+        f"👥 Всего пользователей: <b>{total}</b>\n"
+        f"💎 Премиум: <b>{premium}</b>\n"
+        f"🧪 Тестовых: <b>{test}</b>\n"
+        f"🎮 Играли хотя бы раз: <b>{played}</b>\n"
+        f"🔢 Всего игр в этом месяце: <b>{total_games}</b>\n"
+        f"🆓 Бесплатных: <b>{total - premium}</b>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("toggle_subscription"))
+async def toggle_subscription_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    from database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT value FROM settings WHERE key = 'subscription_enabled'")
+    row = cursor.fetchone()
+
+    current = row["value"] if row else "1"
+    new_value = "0" if current == "1" else "1"
+
+    cursor.execute("""
+        INSERT INTO settings (key, value) VALUES ('subscription_enabled', ?)
+        ON CONFLICT(key) DO UPDATE SET value = ?
+    """, (new_value, new_value))
+
+    conn.commit()
+    conn.close()
+
+    status = "✅ ВКЛЮЧЕН" if new_value == "1" else "⛔ ВЫКЛЮЧЕН"
+    await message.answer(f"Режим подписки: {status}")
+
+
+@dp.message()
+async def unexpected_message(message: types.Message):
+    user_id = message.from_user.id
+    await message.answer(
+        "👋 Добро пожаловать! Нажмите кнопку ниже, чтобы начать тренировку.",
+        reply_markup=get_start_keyboard(user_id),
+    )
+
+
+async def main():
+    init_db()
+    logger.info("Бот запускается...")
+    await asyncio.gather(
+        run_web_server(),
+        dp.start_polling(bot),
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
