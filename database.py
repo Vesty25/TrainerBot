@@ -5,26 +5,25 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
 
 def get_connection():
-    """Создаёт подключение к БД."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    """Создаёт таблицы, если их нет."""
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-           user_id INTEGER PRIMARY KEY,
-           username TEXT,
-           is_test_user INTEGER DEFAULT 0,
-           has_played INTEGER DEFAULT 0,
-           subscription_expires TEXT,
-           created_at TEXT DEFAULT (datetime('now')),
-           last_activity TEXT
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            is_test_user INTEGER DEFAULT 0,
+            has_played INTEGER DEFAULT 0,
+            games_this_month INTEGER DEFAULT 0,
+            subscription_expires TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_activity TEXT
         )
     """)
 
@@ -38,7 +37,6 @@ def init_db():
             payment_id TEXT,
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT (datetime('now'))
-            
         )
     """)
 
@@ -49,10 +47,18 @@ def init_db():
         )
     """)
 
-    # Значение по умолчанию: подписка включена
     cursor.execute("""
         INSERT OR IGNORE INTO settings (key, value) VALUES ('subscription_enabled', '1')
     """)
 
+    conn.commit()
+    conn.close()
+
+
+def reset_monthly_games():
+    """Сбрасывает счётчик игр в начале нового месяца."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET games_this_month = 0")
     conn.commit()
     conn.close()
