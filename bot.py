@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import random
+import os
+import tempfile
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.context import FSMContext
@@ -16,7 +18,7 @@ from scenarios import SCENARIOS
 from goals import GOALS
 from prompts import build_system_prompt
 from deepseek_client import get_ai_response
-from database import init_db
+from database import init_db, execute_sql, fetch_one
 from subscription import (
     is_premium, is_test_user, ensure_user_exists,
     update_activity, get_available_roles,
@@ -295,7 +297,6 @@ def get_final_config_text(role_name: str, scenario_name: str, goal_name: str, us
     text += f"🎯 <b>Цель:</b> {goal_name}\n"
     text += f"<i>{goal_data['description']}</i>\n\n"
 
-    # Информация о типе анализа
     if not is_prem and first_game:
         text += (
             "🎁 <b>Бонус для первой игры:</b> расширенный анализ диалога.\n"
@@ -389,7 +390,6 @@ async def random_game_button(message: types.Message, state: FSMContext):
         f"роль={role_name}, сценарий={scenario_name}, цель={goal_name}"
     )
 
-    # Проверяем лимит (на случай если премиум-статус изменился)
     if not can_play(user_id, MAX_FREE_GAMES):
         games = get_games_this_month(user_id)
         await message.answer(
@@ -413,22 +413,14 @@ async def subscription_button(message: types.Message):
     user_id = message.from_user.id
 
     if is_premium(user_id):
-        from database import get_connection
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT subscription_expires FROM users WHERE user_id = ?",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
         if is_test_user(user_id):
             expires = "вечная (тестовый доступ)"
-        elif row and row["subscription_expires"]:
-            expires = row["subscription_expires"]
         else:
-            expires = "неизвестно"
+            row = fetch_one(
+                "SELECT subscription_expires FROM users WHERE user_id = ?",
+                (user_id,)
+            )
+            expires = row["subscription_expires"] if row and row["subscription_expires"] else "неизвестно"
 
         await message.answer(
             f"💎 <b>У вас активна премиум-подписка!</b>\n\n"
@@ -570,12 +562,7 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
     }
 
     # Обновляем БД
-    from database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE users SET has_played = 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
-    conn.close()
+    execute_sql("UPDATE users SET has_played = 1 WHERE user_id = ?", (user_id,))
 
     # Увеличиваем счётчик игр
     increment_games_this_month(user_id)
@@ -860,7 +847,8 @@ async def admin_command(message: types.Message):
         "/add_sub &lt;user_id&gt; &lt;дней&gt; — добавить подписку\n"
         "/check_user &lt;user_id&gt; — проверить статус\n"
         "/stats — статистика\n"
-        "/toggle_subscription — вкл/выкл режим подписки",
+        "/toggle_subscription — вкл/выкл режим подписки\n"
+        "/export_db — скачать бекап базы данных",
         parse_mode="HTML",
     )
 
@@ -882,13 +870,8 @@ async def remove_test_command(message: types.Message):
     if message.from_user.id not in ADMIN_USER_IDS:
         return
     try:
-        from database import get_connection
         user_id = int(message.text.split()[1])
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET is_test_user = 0 WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
+        execute_sql("UPDATE users SET is_test_user = 0 WHERE user_id = ?", (user_id,))
         await message.answer(f"✅ Тестовый статус пользователя {user_id} убран.")
     except (IndexError, ValueError):
         await message.answer("❌ Использование: /remove_test <user_id>")
@@ -914,7 +897,6 @@ async def check_user_command(message: types.Message):
     if message.from_user.id not in ADMIN_USER_IDS:
         return
     try:
-        from database import get_connection
         user_id = int(message.text.split()[1])
         premium = is_premium(user_id)
         test = is_test_user(user_id)
@@ -923,15 +905,11 @@ async def check_user_command(message: types.Message):
         if test:
             status += " (тестовый — вечная подписка)"
 
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
+        row = fetch_one(
             "SELECT subscription_expires, created_at, last_activity, has_played, games_this_month "
             "FROM users WHERE user_id = ?",
             (user_id,)
         )
-        row = cursor.fetchone()
-        conn.close()
 
         expires = row["subscription_expires"] if row and row["subscription_expires"] else "Нет"
         created = row["created_at"] if row else "Нет данных"
@@ -957,29 +935,25 @@ async def check_user_command(message: types.Message):
 async def stats_command(message: types.Message):
     if message.from_user.id not in ADMIN_USER_IDS:
         return
-    from database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
 
-    cursor.execute("SELECT COUNT(*) as total FROM users")
-    total = cursor.fetchone()["total"]
+    from database import fetch_all
 
-    cursor.execute(
-        "SELECT COUNT(*) as premium FROM users "
+    total = fetch_all("SELECT COUNT(*) as c FROM users")[0]["c"]
+
+    premium_row = fetch_all(
+        "SELECT COUNT(*) as c FROM users "
         "WHERE subscription_expires > datetime('now') OR is_test_user = 1"
     )
-    premium = cursor.fetchone()["premium"]
+    premium = premium_row[0]["c"] if premium_row else 0
 
-    cursor.execute("SELECT COUNT(*) as test FROM users WHERE is_test_user = 1")
-    test = cursor.fetchone()["test"]
+    test_row = fetch_all("SELECT COUNT(*) as c FROM users WHERE is_test_user = 1")
+    test = test_row[0]["c"] if test_row else 0
 
-    cursor.execute("SELECT COUNT(*) as played FROM users WHERE has_played = 1")
-    played = cursor.fetchone()["played"]
+    played_row = fetch_all("SELECT COUNT(*) as c FROM users WHERE has_played = 1")
+    played = played_row[0]["c"] if played_row else 0
 
-    cursor.execute("SELECT SUM(games_this_month) as total_games FROM users")
-    total_games = cursor.fetchone()["total_games"] or 0
-
-    conn.close()
+    games_row = fetch_all("SELECT SUM(games_this_month) as c FROM users")
+    total_games = games_row[0]["c"] if games_row and games_row[0]["c"] else 0
 
     await message.answer(
         f"📊 <b>Статистика</b>\n\n"
@@ -998,26 +972,39 @@ async def toggle_subscription_command(message: types.Message):
     if message.from_user.id not in ADMIN_USER_IDS:
         return
 
-    from database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT value FROM settings WHERE key = 'subscription_enabled'")
-    row = cursor.fetchone()
-
+    row = fetch_one("SELECT value FROM settings WHERE key = 'subscription_enabled'")
     current = row["value"] if row else "1"
     new_value = "0" if current == "1" else "1"
 
-    cursor.execute("""
-        INSERT INTO settings (key, value) VALUES ('subscription_enabled', ?)
-        ON CONFLICT(key) DO UPDATE SET value = ?
-    """, (new_value, new_value))
-
-    conn.commit()
-    conn.close()
+    execute_sql(
+        "INSERT INTO settings (key, value) VALUES ('subscription_enabled', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = ?",
+        (new_value, new_value)
+    )
 
     status = "✅ ВКЛЮЧЕН" if new_value == "1" else "⛔ ВЫКЛЮЧЕН"
     await message.answer(f"Режим подписки: {status}")
+
+
+@dp.message(Command("export_db"))
+async def export_db_command(message: types.Message):
+    """Экспортирует базу данных в SQL-формате."""
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    from subscription import export_users_to_sql
+    sql_data = export_users_to_sql()
+
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sql', delete=False, encoding='utf-8') as f:
+        f.write(sql_data)
+        temp_path = f.name
+
+    await message.answer_document(
+        types.FSInputFile(temp_path, filename="backup.sql"),
+        caption="📦 Бекап базы данных (SQL формат)"
+    )
+
+    os.unlink(temp_path)
 
 
 @dp.message()
