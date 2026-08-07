@@ -865,4 +865,50 @@ async def stats_command(message: types.Message):
     )
 
 
-@dp.message
+@dp.message(Command("toggle_subscription"))
+async def toggle_subscription_command(message: types.Message):
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    from database import get_connection
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT value FROM settings WHERE key = 'subscription_enabled'")
+    row = cursor.fetchone()
+
+    current = row["value"] if row else "1"
+    new_value = "0" if current == "1" else "1"
+
+    cursor.execute("""
+        INSERT INTO settings (key, value) VALUES ('subscription_enabled', ?)
+        ON CONFLICT(key) DO UPDATE SET value = ?
+    """, (new_value, new_value))
+
+    conn.commit()
+    conn.close()
+
+    status = "✅ ВКЛЮЧЕН" if new_value == "1" else "⛔ ВЫКЛЮЧЕН"
+    await message.answer(f"Режим подписки: {status}")
+
+
+@dp.message()
+async def unexpected_message(message: types.Message):
+    user_id = message.from_user.id
+    await message.answer(
+        "👋 Добро пожаловать! Нажмите кнопку ниже, чтобы начать тренировку.",
+        reply_markup=get_start_keyboard(user_id),
+    )
+
+
+async def main():
+    init_db()
+    logger.info("Бот запускается...")
+    await asyncio.gather(
+        run_web_server(),
+        dp.start_polling(bot),
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
