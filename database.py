@@ -13,7 +13,6 @@ def get_connection():
 
 
 def init_db():
-    """Создаёт таблицы, если их нет."""
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -39,6 +38,18 @@ def init_db():
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT (datetime('now'))
         )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
+    # Значение по умолчанию: подписка включена
+    cursor.execute("""
+        INSERT OR IGNORE INTO settings (key, value) VALUES ('subscription_enabled', '1')
     """)
 
     conn.commit()
