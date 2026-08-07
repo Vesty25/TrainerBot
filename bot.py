@@ -399,6 +399,7 @@ async def unexpected_message(message: types.Message):
 
 
 async def main():
+    init_db()
     logger.info("Бот запускается...")
     await asyncio.gather(
         run_web_server(),
