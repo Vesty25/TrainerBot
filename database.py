@@ -1,80 +1,78 @@
 import os
-import libsql_experimental as libsql
+import psycopg2
+import psycopg2.extras
 
-# Настройки Turso
-TURSO_URL = os.getenv(libsql://trainer-pm-bot-vesty25.aws-us-east-2.turso.io, "")
-TURSO_TOKEN = os.getenv(eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODYxMjY0NzMsImlkIjoiMDE5ZmRkNmUtOGIwMS03ODNjLWFjYzMtMzg1YjJlMGNlNDM5Iiwia2lkIjoiWlNUNGZDUGx1cFdObWg0RGV2SHBjV1RxTWlMRjNFVUJDQXBxODAyMVJBYyIsInJpZCI6IjQyYWZmMTkzLTY4ZGYtNDQ4YS04YzIwLTI0OWUzZDkzMTA5MSJ9.h033_y68wu9M7DeK666J4NxQenl_A5qdfXP8ckgV5CJYURU_w4waBKAyDyMEzHHpZiufq6m_bOcZkUC00eHmAA, "")
-
-# Если переменные Turso заданы — используем облачную БД
-USE_TURSO = bool(TURSO_URL and TURSO_TOKEN)
-
-if USE_TURSO:
-    client = libsql.connect(
-        database=TURSO_URL,
-        auth_token=TURSO_TOKEN,
-    )
-else:
-    import sqlite3
-    DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 
-def get_turso():
-    """Возвращает клиент Turso."""
-    return client
-
-
-def get_sqlite_conn():
-    """Возвращает соединение SQLite."""
-    import sqlite3
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_conn():
+    """Возвращает соединение с БД (PostgreSQL или SQLite)."""
+    if DATABASE_URL:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = True
+        return conn
+    else:
+        import sqlite3
+        DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def execute_sql(query: str, params: tuple = ()):
     """Выполняет SQL-запрос (INSERT, UPDATE, DELETE, CREATE)."""
-    if USE_TURSO:
-        return client.execute(query, params)
-    else:
-        conn = get_sqlite_conn()
-        cursor = conn.cursor()
-        result = cursor.execute(query, params)
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    # Адаптация синтаксиса SQLite → PostgreSQL
+    if DATABASE_URL:
+        query = query.replace("AUTOINCREMENT", "")
+        query = query.replace("datetime('now')", "NOW()")
+        query = query.replace("INSERT OR IGNORE", "INSERT ON CONFLICT DO NOTHING")
+        query = query.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+
+    cursor.execute(query, params)
+    if not DATABASE_URL:
         conn.commit()
-        conn.close()
-        return result
+    conn.close()
 
 
 def fetch_one(query: str, params: tuple = ()):
     """Возвращает одну строку как словарь."""
-    if USE_TURSO:
-        result = client.execute(query, params)
-        rows = result.fetchall()
-        if rows:
-            row = rows[0]
-            return {col: row[i] for i, col in enumerate(result.columns)}
-        return None
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    if DATABASE_URL:
+        query = query.replace("datetime('now')", "NOW()")
+
+    cursor.execute(query, params)
+    row = cursor.fetchone()
+    
+    if row:
+        cols = [desc[0] for desc in cursor.description]
+        result = dict(zip(cols, row))
     else:
-        conn = get_sqlite_conn()
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        row = cursor.fetchone()
-        conn.close()
-        return row
+        result = None
+    
+    conn.close()
+    return result
 
 
 def fetch_all(query: str, params: tuple = ()):
     """Возвращает все строки."""
-    if USE_TURSO:
-        result = client.execute(query, params)
-        rows = result.fetchall()
-        return [{col: row[i] for i, col in enumerate(result.columns)} for row in rows]
-    else:
-        conn = get_sqlite_conn()
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        conn.close()
-        return rows
+    conn = get_conn()
+    cursor = conn.cursor()
+
+    if DATABASE_URL:
+        query = query.replace("datetime('now')", "NOW()")
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    cols = [desc[0] for desc in cursor.description]
+    
+    result = [dict(zip(cols, row)) for row in rows]
+    conn.close()
+    return result
 
 
 def init_db():
@@ -112,6 +110,15 @@ def init_db():
         )
     """)
 
-    execute_sql("""
-        INSERT OR IGNORE INTO settings (key, value) VALUES ('subscription_enabled', '1')
-    """)
+    # В PostgreSQL другой синтаксис для INSERT OR IGNORE
+    if DATABASE_URL:
+        execute_sql("""
+            INSERT INTO settings (key, value) 
+            VALUES ('subscription_enabled', '1')
+            ON CONFLICT (key) DO NOTHING
+        """)
+    else:
+        execute_sql("""
+            INSERT OR IGNORE INTO settings (key, value) 
+            VALUES ('subscription_enabled', '1')
+        """)
