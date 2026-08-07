@@ -91,21 +91,33 @@ def add_test_user(user_id: int):
     conn.close()
 
 
-def ensure_user_exists(user_id: int, username: str = None):
-    """Создаёт запись о пользователе, если её нет."""
+def ensure_user_exists(user_id: int, username: str = None) -> bool:
+    """Создаёт запись о пользователе, если её нет. Возвращает True, если пользователь новый."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        INSERT OR IGNORE INTO users (user_id, username)
-        VALUES (?, ?)
-    """, (user_id, username))
-    if username:
-        cursor.execute(
-            "UPDATE users SET username = ? WHERE user_id = ?",
-            (username, user_id)
-        )
-    conn.commit()
-    conn.close()
+
+    cursor.execute("SELECT user_id, has_played FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+
+    if row:
+        # Пользователь существует — обновляем username
+        if username:
+            cursor.execute(
+                "UPDATE users SET username = ? WHERE user_id = ?",
+                (username, user_id)
+            )
+        conn.commit()
+        conn.close()
+        return row["has_played"] == 0  # True если ещё не играл (т.е. "новый")
+    else:
+        # Новый пользователь
+        cursor.execute("""
+            INSERT INTO users (user_id, username, has_played)
+            VALUES (?, ?, 0)
+        """, (user_id, username))
+        conn.commit()
+        conn.close()
+        return True  # новый пользователь
 
 
 def update_activity(user_id: int):
