@@ -11,6 +11,15 @@ def is_test_user(user_id: int) -> bool:
     conn.close()
     return row is not None and row["is_test_user"] == 1
 
+def update_activity(user_id: int):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET last_activity = datetime('now') WHERE user_id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
 
 def is_premium(user_id: int) -> bool:
     """Проверяет, есть ли у пользователя активная премиум-подписка."""
