@@ -892,6 +892,23 @@ async def add_sub_command(message: types.Message):
         await message.answer("❌ Использование: /add_sub <user_id> <дней>")
 
 
+@dp.message(Command("remove_sub"))
+async def remove_sub_command(message: types.Message):
+    """Снимает подписку с пользователя: /remove_sub 123456789"""
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+    try:
+        user_id = int(message.text.split()[1])
+        execute_sql(
+            "UPDATE users SET subscription_expires = NULL WHERE user_id = ?",
+            (user_id,)
+        )
+        await message.answer(f"✅ Подписка пользователя {user_id} отозвана.")
+        logger.info(f"Admin {message.from_user.id} removed subscription for user {user_id}")
+    except (IndexError, ValueError):
+        await message.answer("❌ Использование: /remove_sub <user_id>")
+        
+
 @dp.message(Command("check_user"))
 async def check_user_command(message: types.Message):
     if message.from_user.id not in ADMIN_USER_IDS:
