@@ -845,6 +845,7 @@ async def admin_command(message: types.Message):
         "/add_test &lt;user_id&gt; — добавить тестового пользователя\n"
         "/remove_test &lt;user_id&gt; — убрать тестового\n"
         "/add_sub &lt;user_id&gt; &lt;дней&gt; — добавить подписку\n"
+        "/remove_sub &lt;user_id&gt; — отозвать подписку\n"
         "/check_user &lt;user_id&gt; — проверить статус\n"
         "/stats — статистика\n"
         "/toggle_subscription — вкл/выкл режим подписки\n"
