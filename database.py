@@ -19,18 +19,29 @@ def get_conn():
         return conn
 
 
+def _adapt_query(query: str) -> str:
+    """Адаптирует SQL-запрос из синтаксиса SQLite в PostgreSQL."""
+    if not DATABASE_URL:
+        return query
+    # Заменяем ? на %s (только для PostgreSQL)
+    query = query.replace("?", "%s")
+    # Адаптация синтаксиса
+    query = query.replace("AUTOINCREMENT", "")
+    query = query.replace("datetime('now')", "NOW()")
+    query = query.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
+    return query
+
+
+def _adapt_params(params: tuple) -> tuple:
+    """Адаптирует параметры (None -> NULL для PostgreSQL)."""
+    return params
+
+
 def execute_sql(query: str, params: tuple = ()):
     """Выполняет SQL-запрос (INSERT, UPDATE, DELETE, CREATE)."""
+    query = _adapt_query(query)
     conn = get_conn()
     cursor = conn.cursor()
-
-    # Адаптация синтаксиса SQLite → PostgreSQL
-    if DATABASE_URL:
-        query = query.replace("AUTOINCREMENT", "")
-        query = query.replace("datetime('now')", "NOW()")
-        query = query.replace("INSERT OR IGNORE", "INSERT ON CONFLICT DO NOTHING")
-        query = query.replace("INTEGER PRIMARY KEY", "SERIAL PRIMARY KEY")
-
     cursor.execute(query, params)
     if not DATABASE_URL:
         conn.commit()
@@ -39,37 +50,31 @@ def execute_sql(query: str, params: tuple = ()):
 
 def fetch_one(query: str, params: tuple = ()):
     """Возвращает одну строку как словарь."""
+    query = _adapt_query(query)
     conn = get_conn()
     cursor = conn.cursor()
-
-    if DATABASE_URL:
-        query = query.replace("datetime('now')", "NOW()")
-
     cursor.execute(query, params)
     row = cursor.fetchone()
-    
+
     if row:
         cols = [desc[0] for desc in cursor.description]
         result = dict(zip(cols, row))
     else:
         result = None
-    
+
     conn.close()
     return result
 
 
 def fetch_all(query: str, params: tuple = ()):
     """Возвращает все строки."""
+    query = _adapt_query(query)
     conn = get_conn()
     cursor = conn.cursor()
-
-    if DATABASE_URL:
-        query = query.replace("datetime('now')", "NOW()")
-
     cursor.execute(query, params)
     rows = cursor.fetchall()
     cols = [desc[0] for desc in cursor.description]
-    
+
     result = [dict(zip(cols, row)) for row in rows]
     conn.close()
     return result
@@ -110,7 +115,7 @@ def init_db():
         )
     """)
 
-    # В PostgreSQL другой синтаксис для INSERT OR IGNORE
+    # Для PostgreSQL используем другой синтаксис
     if DATABASE_URL:
         execute_sql("""
             INSERT INTO settings (key, value) 
