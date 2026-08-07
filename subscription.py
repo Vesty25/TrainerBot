@@ -11,18 +11,24 @@ def is_test_user(user_id: int) -> bool:
     conn.close()
     return row is not None and row["is_test_user"] == 1
 
-def update_activity(user_id: int):
+
+def is_subscription_enabled() -> bool:
+    """Проверяет, включён ли режим подписки глобально."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE users SET last_activity = datetime('now') WHERE user_id = ?",
-        (user_id,)
-    )
-    conn.commit()
+    cursor.execute("SELECT value FROM settings WHERE key = 'subscription_enabled'")
+    row = cursor.fetchone()
     conn.close()
+    return row["value"] == "1" if row else True
+
 
 def is_premium(user_id: int) -> bool:
     """Проверяет, есть ли у пользователя активная премиум-подписка."""
+    # Если подписка выключена глобально — все premium
+    if not is_subscription_enabled():
+        return True
+
+    # Тестовые пользователи — вечная подписка
     if is_test_user(user_id):
         return True
 
@@ -46,7 +52,6 @@ def add_subscription(user_id: int, days: int):
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Проверяем, есть ли уже подписка
     cursor.execute(
         "SELECT subscription_expires FROM users WHERE user_id = ?",
         (user_id,)
@@ -57,10 +62,8 @@ def add_subscription(user_id: int, days: int):
     if row and row["subscription_expires"]:
         current_expires = datetime.fromisoformat(row["subscription_expires"])
         if current_expires > now:
-            # Продлеваем от текущей даты окончания
             new_expires = current_expires + timedelta(days=days)
         else:
-            # Подписка истекла — начинаем с сегодня
             new_expires = now + timedelta(days=days)
     else:
         new_expires = now + timedelta(days=days)
@@ -97,7 +100,22 @@ def ensure_user_exists(user_id: int, username: str = None):
         VALUES (?, ?)
     """, (user_id, username))
     if username:
-        cursor.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
+        cursor.execute(
+            "UPDATE users SET username = ? WHERE user_id = ?",
+            (username, user_id)
+        )
+    conn.commit()
+    conn.close()
+
+
+def update_activity(user_id: int):
+    """Обновляет время последней активности пользователя."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET last_activity = datetime('now') WHERE user_id = ?",
+        (user_id,)
+    )
     conn.commit()
     conn.close()
 
