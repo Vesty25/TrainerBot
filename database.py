@@ -18,12 +18,13 @@ def init_db():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            is_test_user INTEGER DEFAULT 0,
-            subscription_expires TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            last_activity TEXT
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        is_test_user INTEGER DEFAULT 0,
+        has_played INTEGER DEFAULT 0,
+        subscription_expires TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        last_activity TEXT
         )
     """)
 
@@ -37,6 +38,7 @@ def init_db():
             payment_id TEXT,
             status TEXT DEFAULT 'pending',
             created_at TEXT DEFAULT (datetime('now'))
+            
         )
     """)
 
