@@ -21,7 +21,8 @@ from subscription import (
     is_premium, is_test_user, ensure_user_exists,
     update_activity, get_available_roles,
     get_available_scenarios, get_available_goals,
-    add_test_user,
+    add_test_user, can_play, increment_games_this_month,
+    get_games_this_month, is_first_game,
 )
 
 
@@ -54,6 +55,9 @@ GOAL_BUTTONS = {}
 
 # ID админов
 ADMIN_USER_IDS = [455307194]  # ← Замени на свой Telegram ID
+
+# Максимальное количество бесплатных игр в месяц
+MAX_FREE_GAMES = 5
 
 
 # === Клавиатуры ===
@@ -103,7 +107,6 @@ def build_role_keyboard():
         ROLE_BUTTONS[button_text] = role_name
         buttons.append([types.KeyboardButton(text=button_text)])
 
-    # Добавляем кнопку Прервать
     buttons.append([types.KeyboardButton(text="🛑 Прервать")])
 
     return types.ReplyKeyboardMarkup(
@@ -129,7 +132,6 @@ def build_scenario_keyboard():
         row = buttons[i:i+2]
         rows.append([types.KeyboardButton(text=text) for text in row])
 
-    # Добавляем Назад и Прервать
     rows.append([
         types.KeyboardButton(text="↩️ Назад"),
         types.KeyboardButton(text="🛑 Прервать"),
@@ -153,7 +155,6 @@ def build_goal_keyboard():
         GOAL_BUTTONS[button_text] = goal_name
         buttons.append([types.KeyboardButton(text=button_text)])
 
-    # Добавляем Назад и Прервать
     buttons.append([
         types.KeyboardButton(text="↩️ Назад"),
         types.KeyboardButton(text="🛑 Прервать"),
@@ -256,25 +257,35 @@ def get_welcome_text(user_id: int, first_time: bool):
         else:
             greeting += "💎 <b>У вас активна премиум-подписка!</b> Доступны все функции.\n\n"
     else:
+        games = get_games_this_month(user_id)
+        remaining = MAX_FREE_GAMES - games
         greeting += (
             "💎 <b>Хочешь больше?</b>\n"
             "С премиум-подпиской доступны:\n"
             "• 6 ролей оппонента (сейчас 3)\n"
             "• 20 сценариев (сейчас 10)\n"
             "• 6 целей (сейчас 3)\n"
-            "• Случайная игра\n\n"
+            "• Случайная игра\n"
+            "• Безлимитные диалоги\n"
+            "• Расширенный анализ каждого диалога\n\n"
             "Нажми <b>«💎 Подписка»</b> в главном меню.\n\n"
+            f"🆓 <b>Бесплатный доступ:</b>\n"
+            f"• 3 роли, 10 сценариев, 3 цели\n"
+            f"• {remaining} из {MAX_FREE_GAMES} диалогов в этом месяце осталось\n"
+            f"• Первый диалог — с расширенным анализом\n\n"
         )
 
     greeting += build_role_text(user_id)
     return greeting
 
 
-def get_final_config_text(role_name: str, scenario_name: str, goal_name: str):
+def get_final_config_text(role_name: str, scenario_name: str, goal_name: str, user_id: int):
     """Финальное сообщение с выбранными параметрами."""
     role_data = ROLES[role_name]
     scenario_data = SCENARIOS[scenario_name]
     goal_data = GOALS[goal_name]
+    is_prem = is_premium(user_id)
+    first_game = is_first_game(user_id)
 
     text = "✅ <b>Игра настроена!</b>\n\n"
     text += f"🎭 <b>Роль оппонента:</b> {role_name}\n"
@@ -283,6 +294,21 @@ def get_final_config_text(role_name: str, scenario_name: str, goal_name: str):
     text += f"<i>{scenario_data['context']}</i>\n\n"
     text += f"🎯 <b>Цель:</b> {goal_name}\n"
     text += f"<i>{goal_data['description']}</i>\n\n"
+
+    # Информация о типе анализа
+    if not is_prem and first_game:
+        text += (
+            "🎁 <b>Бонус для первой игры:</b> расширенный анализ диалога.\n"
+            "В следующих играх анализ будет сокращённым.\n"
+            "💎 С премиум-подпиской — полный анализ всегда.\n\n"
+        )
+    elif not is_prem:
+        games = get_games_this_month(user_id)
+        remaining = MAX_FREE_GAMES - games
+        text += f"🆓 Осталось бесплатных игр в этом месяце: {remaining}\n\n"
+    else:
+        text += "💎 Премиум-подписка: полный анализ диалога.\n\n"
+
     text += "Сейчас оппонент начнёт диалог. Поехали! 🚀\n\n"
     text += "Для завершения нажми кнопку ниже или отправь /stop"
 
@@ -363,7 +389,19 @@ async def random_game_button(message: types.Message, state: FSMContext):
         f"роль={role_name}, сценарий={scenario_name}, цель={goal_name}"
     )
 
-    config_text = get_final_config_text(role_name, scenario_name, goal_name)
+    # Проверяем лимит (на случай если премиум-статус изменился)
+    if not can_play(user_id, MAX_FREE_GAMES):
+        games = get_games_this_month(user_id)
+        await message.answer(
+            f"⚠️ <b>Лимит игр исчерпан!</b>\n\n"
+            f"Вы использовали {games}/{MAX_FREE_GAMES} бесплатных диалогов.\n"
+            "💎 Оформите премиум-подписку.",
+            parse_mode="HTML",
+            reply_markup=get_start_keyboard(user_id),
+        )
+        return
+
+    config_text = get_final_config_text(role_name, scenario_name, goal_name, user_id)
     config_msg = await message.answer(config_text, parse_mode="HTML")
     add_selection_message(user_id, config_msg.message_id)
 
@@ -396,18 +434,24 @@ async def subscription_button(message: types.Message):
             f"💎 <b>У вас активна премиум-подписка!</b>\n\n"
             f"📅 Действует до: {expires}\n\n"
             "Вам доступны все роли (6), сценарии (20) и цели (6), "
-            "а также случайная игра.",
+            "а также случайная игра и безлимитные диалоги.",
             parse_mode="HTML",
             reply_markup=get_main_menu_keyboard(user_id),
         )
     else:
+        games = get_games_this_month(user_id)
+        remaining = MAX_FREE_GAMES - games
+
         await message.answer(
             "💎 <b>Премиум-подписка</b>\n\n"
             "С подпиской вы получаете:\n"
             "• 6 ролей оппонента (вместо 3)\n"
             "• 20 сценариев (вместо 10)\n"
             "• 6 целей (вместо 3)\n"
-            "• Случайную игру\n\n"
+            "• Случайную игру\n"
+            "• Безлимитные диалоги\n"
+            "• Расширенный анализ каждого диалога\n\n"
+            f"🆓 У вас осталось {remaining}/{MAX_FREE_GAMES} бесплатных игр.\n\n"
             "💰 Стоимость: 299 ₽ / месяц\n\n"
             "Для оформления подписки напишите администратору: @your_username",
             parse_mode="HTML",
@@ -426,20 +470,17 @@ async def stop_button(message: types.Message, state: FSMContext):
 
 @dp.message(lambda msg: msg.text == "🛑 Прервать")
 async def cancel_button(message: types.Message, state: FSMContext):
-    """Обработка кнопки Прервать на любом шаге настройки."""
     await cancel_setup(message, state)
 
 
 @dp.message(lambda msg: msg.text == "↩️ Назад")
 async def back_button(message: types.Message, state: FSMContext):
-    """Обработка кнопки Назад на шагах 2 и 3."""
     user_id = message.from_user.id
     current_state = await state.get_state()
 
     add_selection_message(user_id, message.message_id)
 
     if current_state == GameSetup.waiting_for_scenario.state:
-        # Возврат к выбору роли
         await state.set_state(GameSetup.waiting_for_role)
         msg = await message.answer(
             build_role_text(user_id),
@@ -449,7 +490,6 @@ async def back_button(message: types.Message, state: FSMContext):
         add_selection_message(user_id, msg.message_id)
 
     elif current_state == GameSetup.waiting_for_goal.state:
-        # Возврат к выбору сценария
         user_data = await state.get_data()
         role_name = user_data.get("role_name", "...")
         await state.set_state(GameSetup.waiting_for_scenario)
@@ -492,14 +532,33 @@ async def start_game(message: types.Message, state: FSMContext):
 async def launch_game(message: types.Message, role_name: str, scenario_name: str, goal_name: str, state: FSMContext):
     user_id = message.from_user.id
 
+    # Проверяем лимит игр
+    if not can_play(user_id, MAX_FREE_GAMES):
+        games = get_games_this_month(user_id)
+        await message.answer(
+            f"⚠️ <b>Лимит игр исчерпан!</b>\n\n"
+            f"Вы использовали {games}/{MAX_FREE_GAMES} бесплатных диалогов в этом месяце.\n"
+            "💎 Оформите премиум-подписку для безлимитного доступа.\n"
+            "Нажмите «💎 Подписка» в главном меню.",
+            parse_mode="HTML",
+            reply_markup=get_start_keyboard(user_id),
+        )
+        return
+
     role_prompt = ROLES[role_name]["prompt"]
     scenario_context = SCENARIOS[scenario_name]["context"]
     goal_criteria = GOALS[goal_name]["criteria"]
+
+    # Определяем тип анализа
+    user_is_premium = is_premium(user_id)
+    first_game = is_first_game(user_id)
+    full_analysis = user_is_premium or first_game
 
     system_prompt = build_system_prompt(
         role_prompt=role_prompt,
         scenario_context=scenario_context,
         goal_criteria=goal_criteria,
+        is_premium=full_analysis,
     )
 
     user_messages[user_id] = [{"role": "system", "content": system_prompt}]
@@ -510,6 +569,7 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
         "goal_name": goal_name,
     }
 
+    # Обновляем БД
     from database import get_connection
     conn = get_connection()
     cursor = conn.cursor()
@@ -517,9 +577,12 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
     conn.commit()
     conn.close()
 
+    # Увеличиваем счётчик игр
+    increment_games_this_month(user_id)
+
     await delete_selection_messages(message, user_id)
 
-    config_text = get_final_config_text(role_name, scenario_name, goal_name)
+    config_text = get_final_config_text(role_name, scenario_name, goal_name, user_id)
     config_msg = await message.answer(config_text, parse_mode="HTML", reply_markup=get_stop_keyboard())
     add_selection_message(user_id, config_msg.message_id)
 
@@ -753,12 +816,19 @@ async def help_command(message: types.Message):
         help_text += (
             "💎 <b>Премиум-функции:</b>\n"
             "• 6 ролей, 20 сценариев, 6 целей\n"
-            "• Случайная игра\n\n"
+            "• Случайная игра\n"
+            "• Безлимитные диалоги\n"
+            "• Расширенный анализ\n\n"
         )
     else:
+        games = get_games_this_month(user_id)
+        remaining = MAX_FREE_GAMES - games
         help_text += (
-            "💎 <b>Хочешь больше?</b> Нажми «Подписка» для доступа к 6 ролям, "
-            "20 сценариям и случайной игре.\n\n"
+            f"🆓 <b>Бесплатный доступ:</b>\n"
+            f"• 3 роли, 10 сценариев, 3 цели\n"
+            f"• {remaining}/{MAX_FREE_GAMES} диалогов в этом месяце\n"
+            f"• Первый диалог — расширенный анализ\n\n"
+            "💎 <b>Хочешь больше?</b> Нажми «Подписка».\n\n"
         )
     help_text += "Удачи в переговорах! 💼"
 
@@ -785,181 +855,4 @@ async def admin_command(message: types.Message):
     await message.answer(
         "🔧 <b>Админ-панель</b>\n\n"
         "<b>Команды:</b>\n"
-        "/add_test &lt;user_id&gt; — добавить тестового пользователя\n"
-        "/remove_test &lt;user_id&gt; — убрать тестового\n"
-        "/add_sub &lt;user_id&gt; &lt;дней&gt; — добавить подписку\n"
-        "/check_user &lt;user_id&gt; — проверить статус\n"
-        "/stats — статистика\n"
-        "/toggle_subscription — вкл/выкл режим подписки",
-        parse_mode="HTML",
-    )
-
-
-@dp.message(Command("add_test"))
-async def add_test_command(message: types.Message):
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-    try:
-        user_id = int(message.text.split()[1])
-        add_test_user(user_id)
-        await message.answer(f"✅ Пользователь {user_id} добавлен как тестовый (вечная премиум-подписка).")
-    except (IndexError, ValueError):
-        await message.answer("❌ Использование: /add_test <user_id>")
-
-
-@dp.message(Command("remove_test"))
-async def remove_test_command(message: types.Message):
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-    try:
-        from database import get_connection
-        user_id = int(message.text.split()[1])
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET is_test_user = 0 WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
-        await message.answer(f"✅ Тестовый статус пользователя {user_id} убран.")
-    except (IndexError, ValueError):
-        await message.answer("❌ Использование: /remove_test <user_id>")
-
-
-@dp.message(Command("add_sub"))
-async def add_sub_command(message: types.Message):
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-    try:
-        from subscription import add_subscription
-        parts = message.text.split()
-        user_id = int(parts[1])
-        days = int(parts[2])
-        add_subscription(user_id, days)
-        await message.answer(f"✅ Подписка пользователя {user_id} продлена на {days} дней.")
-    except (IndexError, ValueError):
-        await message.answer("❌ Использование: /add_sub <user_id> <дней>")
-
-
-@dp.message(Command("check_user"))
-async def check_user_command(message: types.Message):
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-    try:
-        from database import get_connection
-        user_id = int(message.text.split()[1])
-        premium = is_premium(user_id)
-        test = is_test_user(user_id)
-
-        status = "💎 Премиум" if premium else "🆓 Бесплатный"
-        if test:
-            status += " (тестовый — вечная подписка)"
-
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT subscription_expires, created_at, last_activity, has_played FROM users WHERE user_id = ?",
-            (user_id,)
-        )
-        row = cursor.fetchone()
-        conn.close()
-
-        expires = row["subscription_expires"] if row and row["subscription_expires"] else "Нет"
-        created = row["created_at"] if row else "Нет данных"
-        last_act = row["last_activity"] if row and row["last_activity"] else "Нет данных"
-        has_played = "Да" if row and row["has_played"] else "Нет"
-
-        await message.answer(
-            f"👤 <b>Пользователь:</b> {user_id}\n"
-            f"📊 <b>Статус:</b> {status}\n"
-            f"📅 <b>Подписка до:</b> {expires}\n"
-            f"🎮 <b>Играл ранее:</b> {has_played}\n"
-            f"🕐 <b>Создан:</b> {created}\n"
-            f"🕑 <b>Активность:</b> {last_act}",
-            parse_mode="HTML",
-        )
-    except (IndexError, ValueError):
-        await message.answer("❌ Использование: /check_user <user_id>")
-
-
-@dp.message(Command("stats"))
-async def stats_command(message: types.Message):
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-    from database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT COUNT(*) as total FROM users")
-    total = cursor.fetchone()["total"]
-
-    cursor.execute(
-        "SELECT COUNT(*) as premium FROM users "
-        "WHERE subscription_expires > datetime('now') OR is_test_user = 1"
-    )
-    premium = cursor.fetchone()["premium"]
-
-    cursor.execute("SELECT COUNT(*) as test FROM users WHERE is_test_user = 1")
-    test = cursor.fetchone()["test"]
-
-    cursor.execute("SELECT COUNT(*) as played FROM users WHERE has_played = 1")
-    played = cursor.fetchone()["played"]
-
-    conn.close()
-
-    await message.answer(
-        f"📊 <b>Статистика</b>\n\n"
-        f"👥 Всего пользователей: <b>{total}</b>\n"
-        f"💎 Премиум: <b>{premium}</b>\n"
-        f"🧪 Тестовых: <b>{test}</b>\n"
-        f"🎮 Играли хотя бы раз: <b>{played}</b>\n"
-        f"🆓 Бесплатных: <b>{total - premium}</b>",
-        parse_mode="HTML",
-    )
-
-
-@dp.message(Command("toggle_subscription"))
-async def toggle_subscription_command(message: types.Message):
-    if message.from_user.id not in ADMIN_USER_IDS:
-        return
-
-    from database import get_connection
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT value FROM settings WHERE key = 'subscription_enabled'")
-    row = cursor.fetchone()
-
-    current = row["value"] if row else "1"
-    new_value = "0" if current == "1" else "1"
-
-    cursor.execute("""
-        INSERT INTO settings (key, value) VALUES ('subscription_enabled', ?)
-        ON CONFLICT(key) DO UPDATE SET value = ?
-    """, (new_value, new_value))
-
-    conn.commit()
-    conn.close()
-
-    status = "✅ ВКЛЮЧЕН" if new_value == "1" else "⛔ ВЫКЛЮЧЕН"
-    await message.answer(f"Режим подписки: {status}")
-
-
-@dp.message()
-async def unexpected_message(message: types.Message):
-    user_id = message.from_user.id
-    await message.answer(
-        "👋 Добро пожаловать! Нажмите кнопку ниже, чтобы начать тренировку.",
-        reply_markup=get_start_keyboard(user_id),
-    )
-
-
-async def main():
-    init_db()
-    logger.info("Бот запускается...")
-    await asyncio.gather(
-        run_web_server(),
-        dp.start_polling(bot),
-    )
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        "/add_test &lt;user_id&gt; — добавить тестов
