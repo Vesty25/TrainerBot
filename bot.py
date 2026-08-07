@@ -21,7 +21,7 @@ from subscription import (
     is_premium, is_test_user, ensure_user_exists,
     update_activity, get_available_roles,
     get_available_scenarios, get_available_goals,
-    add_test_user, has_played_before,
+    add_test_user,
 )
 
 
