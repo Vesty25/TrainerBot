@@ -1,6 +1,5 @@
 import sqlite3
 import os
-from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
@@ -8,11 +7,12 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 def get_connection():
     """Создаёт подключение к БД."""
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # чтобы можно было обращаться по именам колонок
+    conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
+    """Создаёт таблицы, если их нет."""
     conn = get_connection()
     cursor = conn.cursor()
 
