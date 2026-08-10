@@ -567,15 +567,65 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
     # Увеличиваем счётчик игр
     increment_games_this_month(user_id)
 
+    # Удаляем предыдущие сообщения
     await delete_selection_messages(message, user_id)
 
     config_text = get_final_config_text(role_name, scenario_name, goal_name, user_id)
-    config_msg = await message.answer(config_text, parse_mode="HTML", reply_markup=get_stop_keyboard())
+    config_msg = await message.answer(config_text, parse_mode="HTML")
     add_selection_message(user_id, config_msg.message_id)
 
+    # Запрашиваем ВВОДНУЮ (а не сразу диалог)
     user_messages[user_id].append({
         "role": "user",
-        "content": "Начни диалог своей первой репликой согласно сценарию и роли."
+        "content": (
+            "Выдай вводную согласно инструкции (ЭТАП 1 — ВВОДНАЯ). "
+            "Опиши предысторию, расстановку сил и точку входа пользователя. "
+            "Не начинай диалог — жди сигнала «Готов»."
+        )
+    })
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+    intro_response = await get_ai_response(user_messages[user_id])
+    user_messages[user_id].append({"role": "assistant", "content": intro_response})
+
+    # Показываем вводную и кнопку "Готов"
+    ready_keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[[types.KeyboardButton(text="✅ Готов")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Нажми Готов, чтобы начать диалог",
+    )
+    await message.answer(intro_response, parse_mode="HTML", reply_markup=ready_keyboard)
+    await state.set_state(GameSetup.waiting_for_ready)
+
+@dp.message(StateFilter(GameSetup.waiting_for_ready))
+async def process_ready(message: types.Message, state: FSMContext):
+    """Обработка нажатия кнопки Готов — запуск диалога."""
+    user_id = message.from_user.id
+
+    if message.text != "✅ Готов":
+        await message.answer(
+            "👆 Нажми кнопку <b>«✅ Готов»</b>, чтобы начать диалог.",
+            parse_mode="HTML",
+            reply_markup=types.ReplyKeyboardMarkup(
+                keyboard=[[types.KeyboardButton(text="✅ Готов")]],
+                resize_keyboard=True,
+                one_time_keyboard=True,
+            ),
+        )
+        return
+
+    # Убираем клавиатуру и начинаем диалог
+    await message.answer(
+        "🚀 <b>Диалог начинается!</b>",
+        parse_mode="HTML",
+        reply_markup=get_stop_keyboard(),
+    )
+
+    # Запрашиваем первую реплику оппонента
+    user_messages[user_id].append({
+        "role": "user",
+        "content": "Готов. Начинаем диалог. Твоя первая реплика."
     })
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -584,7 +634,6 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
 
     await message.answer(ai_response)
     await state.set_state(GameSetup.in_dialog)
-
 
 @dp.message(StateFilter(GameSetup.waiting_for_role))
 async def process_role(message: types.Message, state: FSMContext):
@@ -827,6 +876,9 @@ async def stop_anywhere(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state == GameSetup.in_dialog.state:
         await finish_game(message, state)
+    elif current_state == GameSetup.waiting_for_ready.state:
+        # Если остановка на этапе вводной — просто сбрасываем
+        await cancel_setup(message, state)
     else:
         await cancel_setup(message, state)
 
