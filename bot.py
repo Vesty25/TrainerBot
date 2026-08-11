@@ -567,19 +567,19 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
     # Увеличиваем счётчик игр
     increment_games_this_month(user_id)
 
-    # Удаляем предыдущие сообщения
+        # Удаляем предыдущие сообщения с выбором
     await delete_selection_messages(message, user_id)
 
+    # Формируем текст конфигурации
     config_text = get_final_config_text(role_name, scenario_name, goal_name, user_id)
-    config_msg = await message.answer(config_text, parse_mode="HTML")
-    add_selection_message(user_id, config_msg.message_id)
 
-    # Запрашиваем ВВОДНУЮ (а не сразу диалог)
+    # Запрашиваем ПРЕДЫСТОРИЮ
     user_messages[user_id].append({
         "role": "user",
         "content": (
-            "Выдай вводную согласно инструкции (ЭТАП 1 — ВВОДНАЯ). "
-            "Опиши предысторию, расстановку сил и точку входа пользователя. "
+            "Выдай предысторию согласно инструкции (ЭТАП 1 — ПРЕДЫСТОРИЯ). "
+            "Опиши 3-5 предложениями, что произошло за последние 24-48 часов "
+            "и почему этот разговор происходит сейчас. "
             "Не начинай диалог — жди сигнала «Готов»."
         )
     })
@@ -588,14 +588,19 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
     intro_response = await get_ai_response(user_messages[user_id])
     user_messages[user_id].append({"role": "assistant", "content": intro_response})
 
-    # Показываем вводную и кнопку "Готов"
+    # Объединяем конфигурацию и предысторию в ОДНО сообщение
+    combined_text = config_text + "\n" + "—" * 30 + "\n\n" + intro_response
+
     ready_keyboard = types.ReplyKeyboardMarkup(
         keyboard=[[types.KeyboardButton(text="✅ Готов")]],
         resize_keyboard=True,
         one_time_keyboard=True,
         input_field_placeholder="Нажми Готов, чтобы начать диалог",
     )
-    await message.answer(intro_response, parse_mode="HTML", reply_markup=ready_keyboard)
+
+    # Отправляем объединённое сообщение и НЕ добавляем его в список удаляемых
+    await message.answer(combined_text, parse_mode="HTML", reply_markup=ready_keyboard)
+
     await state.set_state(GameSetup.waiting_for_ready)
 
 @dp.message(StateFilter(GameSetup.waiting_for_ready))
