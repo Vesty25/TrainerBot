@@ -571,6 +571,17 @@ async def process_check_payment(callback: types.CallbackQuery):
     status = await check_payment_status(payment_id)
 
     if status == "succeeded":
+        # Активируем подписку СРАЗУ
+        from subscription import add_subscription
+        add_subscription(user_id, days=30)
+
+        # Обновляем статус платежа в БД
+        from database import execute_sql
+        execute_sql(
+            "UPDATE payments SET status = 'paid' WHERE payment_id = ?",
+            (payment_id,)
+        )
+
         await callback.message.answer(
             "✅ <b>Оплата прошла успешно!</b>\n\n"
             "Премиум-подписка активирована на 30 дней.\n"
@@ -585,14 +596,11 @@ async def process_check_payment(callback: types.CallbackQuery):
             "Нажмите «✅ Я оплатил» ещё раз через минуту.",
             parse_mode="HTML",
         )
-    elif status == "canceled":
-        await callback.message.answer(
-            "❌ Платёж отменён. Попробуйте снова.",
-            parse_mode="HTML",
-        )
     else:
         await callback.message.answer(
-            f"⚠️ Не удалось проверить платёж. Статус: {status}",
+            f"⚠️ Статус платежа: {status}\n"
+            "Если вы оплатили, но подписка не активировалась, "
+            "напишите администратору.",
             parse_mode="HTML",
         )
 
@@ -645,6 +653,27 @@ async def start_command(message: types.Message, state: FSMContext):
 
 async def start_game(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+
+        # Проверяем незавершённые платежи (если ЮKassa настроена)
+    from payment import is_yookassa_configured
+    if is_yookassa_configured():
+        from database import fetch_all
+        pending_payments = fetch_all(
+            "SELECT payment_id FROM payments WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (user_id,)
+        )
+        if pending_payments:
+            payment_id = pending_payments[0]["payment_id"]
+            from payment import check_payment_status
+            status = await check_payment_status(payment_id)
+            if status == "succeeded":
+                from subscription import add_subscription
+                add_subscription(user_id, days=30)
+                execute_sql(
+                    "UPDATE payments SET status = 'paid' WHERE payment_id = ?",
+                    (payment_id,)
+                )
+                logger.info(f"Подписка пользователя {user_id} активирована автоматически после проверки")
 
     await delete_selection_messages(message, user_id)
 
