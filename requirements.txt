@@ -4,3 +4,4 @@ python-dotenv>=1.0
 httpx>=0.25
 aiohttp-socks>=0.8
 psycopg2-binary>=2.9
+yookassa>=3.0.0
