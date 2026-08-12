@@ -325,11 +325,41 @@ async def health_check(request):
 async def run_web_server():
     app = web.Application()
     app.router.add_get("/", health_check)
+    app.router.add_post("/yookassa-webhook", yookassa_webhook)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", 10000)
     await site.start()
     logger.info("Health check server started on port 10000")
+
+async def yookassa_webhook(request):
+    """Webhook для ЮKassa."""
+    import json
+    from payment import process_payment_callback
+
+    try:
+        data = await request.json()
+        result = await process_payment_callback(data)
+
+        if result.get("success"):
+            # Уведомляем пользователя в Telegram
+            user_id = result.get("user_id")
+            if user_id:
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "✅ <b>Оплата получена!</b>\n\n"
+                            "Премиум-подписка активирована на 30 дней. 💎"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+        return web.Response(text="OK", status=200)
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return web.Response(text="Error", status=500)
 
 
 # === Вспомогательные функции ===
@@ -410,9 +440,11 @@ async def random_game_button(message: types.Message, state: FSMContext):
 
 @dp.message(lambda msg: msg.text == "💎 Подписка")
 async def subscription_button(message: types.Message):
+    """Обработка кнопки Подписка."""
     user_id = message.from_user.id
 
     if is_premium(user_id):
+        # Уже есть подписка — показываем статус
         if is_test_user(user_id):
             expires = "вечная (тестовый доступ)"
         else:
@@ -431,25 +463,138 @@ async def subscription_button(message: types.Message):
             reply_markup=get_main_menu_keyboard(user_id),
         )
     else:
-        games = get_games_this_month(user_id)
-        remaining = MAX_FREE_GAMES - games
+        # Нет подписки — показываем варианты
+        from payment import is_yookassa_configured, get_subscription_price
 
-        await message.answer(
-            "💎 <b>Премиум-подписка</b>\n\n"
-            "С подпиской вы получаете:\n"
-            "• 6 ролей оппонента (вместо 3)\n"
-            "• 20 сценариев (вместо 10)\n"
-            "• 6 целей (вместо 3)\n"
-            "• Случайную игру\n"
-            "• Безлимитные диалоги\n"
-            "• Расширенный анализ каждого диалога\n\n"
-            f"🆓 У вас осталось {remaining}/{MAX_FREE_GAMES} бесплатных игр.\n\n"
-            "💰 Стоимость: 299 ₽ / месяц\n\n"
-            "Для оформления подписки напишите администратору: @your_username",
+        if is_yookassa_configured():
+            # Показываем кнопку оплаты
+            price = get_subscription_price()
+            pay_keyboard = types.InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [types.InlineKeyboardButton(
+                        text=f"💳 Оплатить {price:.0f} ₽",
+                        callback_data="pay_subscription"
+                    )],
+                ]
+            )
+            await message.answer(
+                "💎 <b>Премиум-подписка</b>\n\n"
+                "С подпиской вы получаете:\n"
+                "• 6 ролей оппонента (вместо 3)\n"
+                "• 20 сценариев (вместо 10)\n"
+                "• 6 целей (вместо 3)\n"
+                "• Случайную игру\n"
+                "• Безлимитные диалоги\n"
+                "• Расширенный анализ каждого диалога\n\n"
+                f"💰 Стоимость: <b>{price:.0f} ₽ / 30 дней</b>\n\n"
+                "Нажмите кнопку ниже, чтобы оплатить:",
+                parse_mode="HTML",
+                reply_markup=pay_keyboard,
+            )
+        else:
+            # ЮKassa не настроена — показываем заглушку
+            games = get_games_this_month(user_id)
+            remaining = MAX_FREE_GAMES - games
+            await message.answer(
+                "💎 <b>Премиум-подписка</b>\n\n"
+                "С подпиской вы получаете:\n"
+                "• 6 ролей оппонента (вместо 3)\n"
+                "• 20 сценариев (вместо 10)\n"
+                "• 6 целей (вместо 3)\n"
+                "• Случайную игру\n"
+                "• Безлимитные диалоги\n\n"
+                f"🆓 У вас осталось {remaining}/{MAX_FREE_GAMES} бесплатных игр.\n\n"
+                "💰 Стоимость: 299 ₽ / месяц\n\n"
+                "Оплата скоро будет доступна.",
+                parse_mode="HTML",
+                reply_markup=get_start_keyboard(user_id),
+            )
+
+@dp.callback_query(lambda c: c.data == "pay_subscription")
+async def process_pay_subscription(callback: types.CallbackQuery):
+    """Обработка нажатия на кнопку оплаты."""
+    user_id = callback.from_user.id
+
+    await callback.answer()
+
+    from payment import create_subscription_payment, is_yookassa_configured
+
+    if not is_yookassa_configured():
+        await callback.message.answer(
+            "⚠️ Оплата временно недоступна. Попробуйте позже.",
             parse_mode="HTML",
-            reply_markup=get_start_keyboard(user_id),
+        )
+        return
+
+    result = await create_subscription_payment(user_id)
+
+    if result["success"]:
+        # Показываем ссылку на оплату
+        pay_keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="💳 Перейти к оплате",
+                    url=result["confirmation_url"]
+                )],
+                [types.InlineKeyboardButton(
+                    text="✅ Я оплатил",
+                    callback_data=f"check_payment:{result['payment_id']}"
+                )],
+            ]
         )
 
+        await callback.message.answer(
+            f"💳 <b>Счёт создан!</b>\n\n"
+            f"Сумма: {result['amount']:.2f} ₽\n"
+            f"Нажмите кнопку ниже, чтобы оплатить.\n"
+            f"После оплаты нажмите «✅ Я оплатил».",
+            parse_mode="HTML",
+            reply_markup=pay_keyboard,
+        )
+    else:
+        await callback.message.answer(
+            f"❌ Ошибка при создании платежа: {result.get('error', 'неизвестная ошибка')}",
+            parse_mode="HTML",
+        )
+
+
+@dp.callback_query(lambda c: c.data.startswith("check_payment:"))
+async def process_check_payment(callback: types.CallbackQuery):
+    """Проверка статуса платежа после нажатия «Я оплатил»."""
+    user_id = callback.from_user.id
+    payment_id = callback.data.split(":")[1]
+
+    await callback.answer("Проверяю...")
+
+    from payment import check_payment_status
+
+    status = await check_payment_status(payment_id)
+
+    if status == "succeeded":
+        await callback.message.answer(
+            "✅ <b>Оплата прошла успешно!</b>\n\n"
+            "Премиум-подписка активирована на 30 дней.\n"
+            "Наслаждайтесь всеми возможностями! 💎",
+            parse_mode="HTML",
+            reply_markup=get_main_menu_keyboard(user_id),
+        )
+    elif status == "pending":
+        await callback.message.answer(
+            "⏳ <b>Платёж ещё в обработке.</b>\n\n"
+            "Обычно это занимает 1-2 минуты.\n"
+            "Нажмите «✅ Я оплатил» ещё раз через минуту.",
+            parse_mode="HTML",
+        )
+    elif status == "canceled":
+        await callback.message.answer(
+            "❌ Платёж отменён. Попробуйте снова.",
+            parse_mode="HTML",
+        )
+    else:
+        await callback.message.answer(
+            f"⚠️ Не удалось проверить платёж. Статус: {status}",
+            parse_mode="HTML",
+        )
 
 @dp.message(lambda msg: msg.text == "🛑 Завершить диалог")
 async def stop_button(message: types.Message, state: FSMContext):
