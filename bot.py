@@ -100,7 +100,8 @@ def get_main_menu_keyboard(user_id: int):
 
 
 def build_role_keyboard():
-    """Клавиатура выбора роли + кнопка Прервать."""
+   def build_role_keyboard(user_id: int = None):
+    """Клавиатура выбора роли + кнопки Случайная игра и Прервать."""
     global ROLE_BUTTONS
     ROLE_BUTTONS = {}
     buttons = []
@@ -108,6 +109,10 @@ def build_role_keyboard():
         button_text = f"Вариант {i}"
         ROLE_BUTTONS[button_text] = role_name
         buttons.append([types.KeyboardButton(text=button_text)])
+
+    # Для premium добавляем Случайную игру
+    if user_id and is_premium(user_id):
+        buttons.append([types.KeyboardButton(text="🎲 Случайная игра")])
 
     buttons.append([types.KeyboardButton(text="🛑 Прервать")])
 
@@ -176,6 +181,7 @@ def build_role_text(user_id: int):
     """Текст с описанием ролей."""
     available_roles = get_available_roles(user_id, ROLES)
     all_roles = ROLES
+    is_prem = is_premium(user_id)
 
     text = "🎭 <b>Шаг 1/3: Выбери роль оппонента</b>\n\n"
     text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
@@ -188,6 +194,9 @@ def build_role_text(user_id: int):
         else:
             text += f"🔒 <b>Вариант {i}: {role_name}</b>\n"
             text += f"<i>{role_data['description']}</i>\n\n"
+
+    if is_prem:
+        text += "🎲 <b>Или нажми «Случайная игра»</b> — бот сам выберет роль, сценарий и цель.\n\n"
 
     return text
 
