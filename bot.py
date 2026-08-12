@@ -639,7 +639,7 @@ async def back_button(message: types.Message, state: FSMContext):
         msg = await message.answer(
             build_role_text(user_id),
             parse_mode="HTML",
-            reply_markup=build_role_keyboard(),
+            reply_markup=build_role_keyboard(user_id),
         )
         add_selection_message(user_id, msg.message_id)
 
@@ -698,7 +698,7 @@ async def start_game(message: types.Message, state: FSMContext):
     update_activity(user_id)
 
     welcome_text = get_welcome_text(user_id, first_time)
-    msg = await message.answer(welcome_text, parse_mode="HTML", reply_markup=build_role_keyboard())
+    msg = await message.answer(welcome_text, parse_mode="HTML", reply_markup=build_role_keyboard(user_id))
     add_selection_message(user_id, msg.message_id)
 
     await state.set_state(GameSetup.waiting_for_role)
@@ -833,7 +833,7 @@ async def process_role(message: types.Message, state: FSMContext):
     if button_text not in ROLE_BUTTONS:
         msg = await message.answer(
             "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать роль.",
-            reply_markup=build_role_keyboard(),
+            reply_markup=build_role_keyboard(user_id),
         )
         add_selection_message(user_id, msg.message_id)
         return
@@ -845,7 +845,7 @@ async def process_role(message: types.Message, state: FSMContext):
         msg = await message.answer(
             "🔒 Эта роль доступна только с премиум-подпиской.\n"
             "Нажми «💎 Подписка» в главном меню, чтобы оформить.",
-            reply_markup=build_role_keyboard(),
+            reply_markup=build_role_keyboard(user_id),
         )
         add_selection_message(user_id, msg.message_id)
         return
