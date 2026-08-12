@@ -9,10 +9,9 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 # Прокси (нужен только при локальном запуске в России)
 PROXY_URL = os.getenv("PROXY_URL", None)
 
-# Ключи платёжной системы (добавишь позже)
-PLATEGA_API_KEY = os.getenv("PLATEGA_API_KEY", "")
-PLATEGA_SHOP_ID = os.getenv("PLATEGA_SHOP_ID", "")
-PLATEGA_SECRET_KEY = os.getenv("PLATEGA_SECRET_KEY", "")
+# ЮKassa
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
 
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN не найден. Проверь файл .env")
