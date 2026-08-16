@@ -99,8 +99,7 @@ def get_main_menu_keyboard(user_id: int):
     )
 
 
-def build_role_keyboard():
-   def build_role_keyboard(user_id: int = None):
+def build_role_keyboard(user_id: int = None):
     """Клавиатура выбора роли + кнопки Случайная игра и Прервать."""
     global ROLE_BUTTONS
     ROLE_BUTTONS = {}
