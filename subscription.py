@@ -162,3 +162,14 @@ def export_users_to_sql() -> str:
         lines.append(f"INSERT OR REPLACE INTO settings ({cols}) VALUES ({vals});")
 
     return "\n".join(lines)
+
+def get_available_groups(user_id: int, all_groups: dict) -> dict:
+    """
+    Возвращает группы навыков, доступные пользователю.
+    Для premium — все 5 групп.
+    Для бесплатных — упрощённый набор без группировки (возвращает пустой словарь,
+    чтобы bot.py использовал прямые сценарии).
+    """
+    if is_premium(user_id):
+        return all_groups
+    return {}  # бесплатные не выбирают группы — им сразу показываются сценарии
