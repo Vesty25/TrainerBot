@@ -289,7 +289,7 @@ def get_welcome_text(user_id: int, first_time: bool):
     return greeting
 
 
-def get_final_config_text(role_name: str, scenario_name: str, goal_name: str, user_id: int):
+def get_final_config_text(role_name: str, scenario_name: str, goal_name: str, user_id: int, skill_group: str = None):
     """Финальное сообщение с выбранными параметрами."""
     role_data = ROLES[role_name]
     scenario_data = SCENARIOS[scenario_name]
@@ -300,6 +300,14 @@ def get_final_config_text(role_name: str, scenario_name: str, goal_name: str, us
     text = "✅ <b>Игра настроена!</b>\n\n"
     text += f"🎭 <b>Роль оппонента:</b> {role_name}\n"
     text += f"<i>{role_data['description']}</i>\n\n"
+
+    # Добавляем навык, если есть
+    if scenario_data.get("skill"):
+        text += f"🧠 <b>Прокачиваемый навык:</b> {scenario_data['skill']}\n"
+
+    if skill_group:
+        text += f"📂 <b>Группа:</b> {skill_group}\n"
+
     text += f"📋 <b>Сценарий:</b> {scenario_name}\n"
     text += f"<i>{scenario_data['context']}</i>\n\n"
     text += f"🎯 <b>Цель:</b> {goal_name}\n"
@@ -859,7 +867,143 @@ async def process_role(message: types.Message, state: FSMContext):
     )
     add_selection_message(user_id, sent_msg.message_id)
     await state.set_state(GameSetup.waiting_for_scenario)
+        # После выбора роли — если premium, показываем группы
+    if is_premium(user_id):
+        from scenarios import SKILL_GROUPS
+        groups_text = "🧠 <b>Шаг 2/4: Какой навык ты хочешь прокачать?</b>\n\n"
+        groups_text += "Выбери группу — каждая группа содержит сценарии, "
+        groups_text += "направленные на развитие конкретного навыка.\n\n"
+        for key, data in SKILL_GROUPS.items():
+            groups_text += f"<b>{key}: {data['name']}</b>\n{data['description']}\n\n"
 
+        sent_msg = await message.answer(
+            groups_text,
+            parse_mode="HTML",
+            reply_markup=build_group_keyboard(user_id),
+        )
+        add_selection_message(user_id, sent_msg.message_id)
+        await state.set_state(GameSetup.waiting_for_skill_group)
+    else:
+        # Для бесплатных — сразу показываем их 5 сценариев
+        from scenarios import get_free_scenarios
+        free_scenarios = get_free_scenarios()
+        scenarios_text = "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
+        scenarios_text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
+        for i, (name, data) in enumerate(free_scenarios.items(), start=1):
+            context = data["context"].replace("Контекст: ", "")
+            scenarios_text += f"<b>Вариант {i}: {name}</b> ({data['skill']})\n{context}\n\n"
+
+        # Создаём клавиатуру с бесплатными сценариями
+        global SCENARIO_BUTTONS
+        SCENARIO_BUTTONS = {}
+        buttons = []
+        for i, scenario_name in enumerate(free_scenarios.keys(), start=1):
+            button_text = f"Вариант {i}"
+            SCENARIO_BUTTONS[button_text] = scenario_name
+            buttons.append([types.KeyboardButton(text=button_text)])
+
+        buttons.append([types.KeyboardButton(text="↩️ Назад")])
+        buttons.append([types.KeyboardButton(text="🛑 Прервать")])
+
+        scenario_keyboard = types.ReplyKeyboardMarkup(
+            keyboard=buttons,
+            resize_keyboard=True,
+            one_time_keyboard=True,
+            input_field_placeholder="Нажми на кнопку ниже",
+        )
+
+        sent_msg = await message.answer(
+            scenarios_text,
+            parse_mode="HTML",
+            reply_markup=scenario_keyboard,
+        )
+        add_selection_message(user_id, sent_msg.message_id)
+        await state.set_state(GameSetup.waiting_for_scenario)
+
+
+def build_group_keyboard(user_id: int):
+    """Клавиатура выбора группы навыков."""
+    global GROUP_BUTTONS
+    GROUP_BUTTONS = {}
+
+    from scenarios import SKILL_GROUPS
+
+    buttons = []
+    for group_key, group_data in SKILL_GROUPS.items():
+        button_text = f"{group_key}: {group_data['name']}"
+        GROUP_BUTTONS[button_text] = group_key
+        buttons.append([types.KeyboardButton(text=button_text)])
+
+    buttons.append([types.KeyboardButton(text="↩️ Назад")])
+    buttons.append([types.KeyboardButton(text="🛑 Прервать")])
+
+    return types.ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Выбери навык",
+    )
+
+@dp.message(StateFilter(GameSetup.waiting_for_skill_group))
+async def process_skill_group(message: types.Message, state: FSMContext):
+    """Обработка выбора группы навыков."""
+    user_id = message.from_user.id
+    button_text = message.text
+
+    add_selection_message(user_id, message.message_id)
+
+    from scenarios import SKILL_GROUPS, get_scenarios_by_group
+
+    if button_text not in GROUP_BUTTONS:
+        msg = await message.answer(
+            "❌ Пожалуйста, нажми на одну из кнопок ниже, чтобы выбрать навык.",
+            reply_markup=build_group_keyboard(user_id),
+        )
+        add_selection_message(user_id, msg.message_id)
+        return
+
+    group_key = GROUP_BUTTONS[button_text]
+    group_data = SKILL_GROUPS[group_key]
+    group_scenarios = get_scenarios_by_group(group_key)
+
+    await state.update_data(skill_group=group_data["name"])
+
+    # Формируем текст со сценариями группы
+    scenarios_text = f"🧠 <b>Навык:</b> {group_data['name']}\n"
+    scenarios_text += f"<i>{group_data['description']}</i>\n\n"
+    scenarios_text += "📋 <b>Шаг 3/4: Выбери сценарий</b>\n\n"
+    scenarios_text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
+
+    # Создаём клавиатуру
+    global SCENARIO_BUTTONS
+    SCENARIO_BUTTONS = {}
+    buttons = []
+    for i, scenario_name in enumerate(group_scenarios.keys(), start=1):
+        button_text = f"Вариант {i}"
+        SCENARIO_BUTTONS[button_text] = scenario_name
+        buttons.append([types.KeyboardButton(text=button_text)])
+
+    buttons.append([types.KeyboardButton(text="↩️ Назад")])
+    buttons.append([types.KeyboardButton(text="🛑 Прервать")])
+
+    scenario_keyboard = types.ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Нажми на кнопку ниже",
+    )
+
+    for i, (name, data) in enumerate(group_scenarios.items(), start=1):
+        context = data["context"].replace("Контекст: ", "")
+        scenarios_text += f"<b>Вариант {i}: {name}</b>\n{context}\n\n"
+
+    sent_msg = await message.answer(
+        scenarios_text,
+        parse_mode="HTML",
+        reply_markup=scenario_keyboard,
+    )
+    add_selection_message(user_id, sent_msg.message_id)
+    await state.set_state(GameSetup.waiting_for_scenario)
 
 @dp.message(StateFilter(GameSetup.waiting_for_scenario))
 async def process_scenario(message: types.Message, state: FSMContext):
