@@ -971,6 +971,7 @@ async def handle_dialog_message(message: types.Message, state: FSMContext):
 
 
 async def finish_game(message: types.Message, state: FSMContext):
+    """Завершение игры и запрос анализа."""
     user_id = message.from_user.id
     reply_count = user_reply_count.get(user_id, 0)
 
@@ -989,6 +990,25 @@ async def finish_game(message: types.Message, state: FSMContext):
     analysis = await get_ai_response(user_messages[user_id])
 
     await message.answer(analysis)
+
+    # === НОВОЕ: Отправляем предложение оставить обратную связь ===
+    if config.FEEDBACK_FORM_URL:
+        feedback_keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(
+                    text="📝 Оставить отзыв",
+                    url=config.FEEDBACK_FORM_URL
+                )],
+            ]
+        )
+        await message.answer(
+            "📝 <b>Помогите сделать тренажёр лучше!</b>\n\n"
+            "Пройдите короткий опрос — это займёт 2-3 минуты.\n"
+            "Ваше мнение поможет улучшить сценарии, роли и анализ.\n\n"
+            "👇 Нажмите кнопку ниже, чтобы открыть форму:",
+            parse_mode="HTML",
+            reply_markup=feedback_keyboard,
+        )
 
     await state.clear()
     if user_id in user_messages:
