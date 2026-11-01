@@ -860,19 +860,16 @@ async def process_role(message: types.Message, state: FSMContext):
     await state.update_data(role_name=role_name)
     logger.info(f"Пользователь {user_id} выбрал роль: {role_name}")
 
-    sent_msg = await message.answer(
-        build_scenario_text(role_name, user_id),
-        parse_mode="HTML",
-        reply_markup=build_scenario_keyboard(),
-    )
-    add_selection_message(user_id, sent_msg.message_id)
-    await state.set_state(GameSetup.waiting_for_scenario)
-        # После выбора роли — если premium, показываем группы
+    # === Дальше — ТОЛЬКО ОДНО сообщение: либо группы, либо 5 бесплатных сценариев ===
+
     if is_premium(user_id):
+        # Premium: показываем выбор группы навыков
         from scenarios import SKILL_GROUPS
         groups_text = "🧠 <b>Шаг 2/4: Какой навык ты хочешь прокачать?</b>\n\n"
-        groups_text += "Выбери группу — каждая группа содержит сценарии, "
-        groups_text += "направленные на развитие конкретного навыка.\n\n"
+        groups_text += (
+            "Выбери группу — каждая группа содержит сценарии, "
+            "направленные на развитие конкретного навыка.\n\n"
+        )
         for key, data in SKILL_GROUPS.items():
             groups_text += f"<b>{key}: {data['name']}</b>\n{data['description']}\n\n"
 
@@ -883,24 +880,26 @@ async def process_role(message: types.Message, state: FSMContext):
         )
         add_selection_message(user_id, sent_msg.message_id)
         await state.set_state(GameSetup.waiting_for_skill_group)
+
     else:
-        # Для бесплатных — сразу показываем их 5 сценариев
+        # Бесплатные: сразу 5 сценариев без группировки
         from scenarios import get_free_scenarios
         free_scenarios = get_free_scenarios()
+
         scenarios_text = "📋 <b>Шаг 2/3: Выбери сценарий</b>\n\n"
         scenarios_text += "👇 <b>Нажми на одну из кнопок ниже:</b>\n\n"
-        for i, (name, data) in enumerate(free_scenarios.items(), start=1):
-            context = data["context"].replace("Контекст: ", "")
-            scenarios_text += f"<b>Вариант {i}: {name}</b> ({data['skill']})\n{context}\n\n"
 
-        # Создаём клавиатуру с бесплатными сценариями
         global SCENARIO_BUTTONS
         SCENARIO_BUTTONS = {}
         buttons = []
-        for i, scenario_name in enumerate(free_scenarios.keys(), start=1):
+        for i, (name, data) in enumerate(free_scenarios.items(), start=1):
             button_text = f"Вариант {i}"
-            SCENARIO_BUTTONS[button_text] = scenario_name
+            SCENARIO_BUTTONS[button_text] = name
             buttons.append([types.KeyboardButton(text=button_text)])
+            context = data["context"].replace("Контекст: ", "")
+            scenarios_text += (
+                f"<b>Вариант {i}: {name}</b> ({data['skill']})\n{context}\n\n"
+            )
 
         buttons.append([types.KeyboardButton(text="↩️ Назад")])
         buttons.append([types.KeyboardButton(text="🛑 Прервать")])
