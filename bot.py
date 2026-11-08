@@ -542,36 +542,6 @@ async def process_pay_subscription(callback: types.CallbackQuery, state: FSMCont
     )
     await state.set_state(GameSetup.waiting_for_email)
 
-    if result["success"]:
-        # Показываем ссылку на оплату
-        pay_keyboard = types.InlineKeyboardMarkup(
-            inline_keyboard=[
-                [types.InlineKeyboardButton(
-                    text="💳 Перейти к оплате",
-                    url=result["confirmation_url"]
-                )],
-                [types.InlineKeyboardButton(
-                    text="✅ Я оплатил",
-                    callback_data=f"check_payment:{result['payment_id']}"
-                )],
-            ]
-        )
-
-        await callback.message.answer(
-            f"💳 <b>Счёт создан!</b>\n\n"
-            f"Сумма: {result['amount']:.2f} ₽\n"
-            f"Нажмите кнопку ниже, чтобы оплатить.\n"
-            f"После оплаты нажмите «✅ Я оплатил».",
-            parse_mode="HTML",
-            reply_markup=pay_keyboard,
-        )
-    else:
-        await callback.message.answer(
-            f"❌ Ошибка при создании платежа: {result.get('error', 'неизвестная ошибка')}",
-            parse_mode="HTML",
-        )
-
-
 @dp.callback_query(lambda c: c.data.startswith("check_payment:"))
 async def process_check_payment(callback: types.CallbackQuery):
     """Проверка статуса платежа после нажатия «Я оплатил»."""
