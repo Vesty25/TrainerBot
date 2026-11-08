@@ -54,23 +54,16 @@ async def create_subscription_payment(user_id: int, user_email: str = None) -> d
             "duration_days": SUBSCRIPTION_DURATION_DAYS,
         },
         # НОВОЕ: объект receipt для 54-ФЗ
-        "receipt": {
-            "customer": {
-                "email": customer_email,
-            },
-            "items": [
-                {
-                    "description": "Премиум-подписка на 30 дней",
-                    "quantity": 1,
-                    "amount": {
-                        "value": f"{SUBSCRIPTION_PRICE:.2f}",
-                        "currency": "RUB",
-                    },
-                    "vat_code": 1,  # 1 = без НДС (уточни свою ставку)
-                    "payment_subject": "service",  # услуга
-                    "payment_mode": "full_payment",  # полный расчёт
-                }
-            ],
+         "receipt": {
+            "customer": {"email": user_email},
+            "items": [{
+                "description": "Премиум-подписка на 30 дней",
+                "quantity": 1,
+                "amount": {"value": f"{SUBSCRIPTION_PRICE:.2f}", "currency": "RUB"},
+                "vat_code": 1,
+                "payment_subject": "service",
+                "payment_mode": "full_payment",
+            }],
         },
     }, uuid.uuid4())
 
