@@ -9,3 +9,4 @@ class GameSetup(StatesGroup):
     waiting_for_goal = State()
     waiting_for_ready = State()
     in_dialog = State()
+    waiting_for_email = State()
