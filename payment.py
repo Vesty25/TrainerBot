@@ -30,18 +30,12 @@ def is_yookassa_configured() -> bool:
     return bool(config.YOOKASSA_SHOP_ID and config.YOOKASSA_SECRET_KEY)
 
 
-async def create_subscription_payment(user_id: int) -> dict:
-    """
-    Создаёт платёж на подписку.
-    Возвращает словарь с payment_id, confirmation_url и amount.
-    """
-    if not is_yookassa_configured():
-        return {
-            "success": False,
-            "error": "ЮKassa не настроена. Добавьте YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY.",
-        }
+async def create_subscription_payment(user_id: int, user_email: str = None) -> dict:
+    # ... (проверка is_yookassa_configured) ...
 
-    payment_id = str(uuid.uuid4())
+    # Нужен email покупателя — можно запросить у пользователя в боте
+    # Если email нет, ЮKassa вернёт ошибку
+    customer_email = user_email or f"user_{user_id}@example.com"  # заглушка, лучше собирать реальный email
 
     payment = Payment.create({
         "amount": {
@@ -50,7 +44,7 @@ async def create_subscription_payment(user_id: int) -> dict:
         },
         "confirmation": {
             "type": "redirect",
-            "return_url": f"https://t.me/Trainer_PM_bot",  # ← Замени на username своего бота
+            "return_url": "https://t.me/Trainer_PM_bot",
         },
         "capture": True,
         "description": f"Премиум-подписка на 30 дней (user_id: {user_id})",
@@ -58,6 +52,25 @@ async def create_subscription_payment(user_id: int) -> dict:
             "user_id": str(user_id),
             "payment_type": "subscription",
             "duration_days": SUBSCRIPTION_DURATION_DAYS,
+        },
+        # НОВОЕ: объект receipt для 54-ФЗ
+        "receipt": {
+            "customer": {
+                "email": customer_email,
+            },
+            "items": [
+                {
+                    "description": "Премиум-подписка на 30 дней",
+                    "quantity": 1,
+                    "amount": {
+                        "value": f"{SUBSCRIPTION_PRICE:.2f}",
+                        "currency": "RUB",
+                    },
+                    "vat_code": 1,  # 1 = без НДС (уточни свою ставку)
+                    "payment_subject": "service",  # услуга
+                    "payment_mode": "full_payment",  # полный расчёт
+                }
+            ],
         },
     }, uuid.uuid4())
 
@@ -159,3 +172,4 @@ def get_subscription_price() -> float:
 def get_subscription_duration() -> int:
     """Возвращает длительность подписки в днях."""
     return SUBSCRIPTION_DURATION_DAYS
+
