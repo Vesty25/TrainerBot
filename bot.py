@@ -527,22 +527,20 @@ async def subscription_button(message: types.Message):
             )
 
 @dp.callback_query(lambda c: c.data == "pay_subscription")
-async def process_pay_subscription(callback: types.CallbackQuery):
-    """Обработка нажатия на кнопку оплаты."""
-    user_id = callback.from_user.id
-
+async def process_pay_subscription(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
-    from payment import create_subscription_payment, is_yookassa_configured
-
+    from payment import is_yookassa_configured
     if not is_yookassa_configured():
-        await callback.message.answer(
-            "⚠️ Оплата временно недоступна. Попробуйте позже.",
-            parse_mode="HTML",
-        )
+        await callback.message.answer("⚠️ Оплата временно недоступна.")
         return
 
-    result = await create_subscription_payment(user_id)
+    await callback.message.answer(
+        "📧 <b>Введите email для получения чека:</b>\n\n"
+        "На этот адрес ЮKassa отправит фискальный чек после оплаты.",
+        parse_mode="HTML",
+    )
+    await state.set_state(GameSetup.waiting_for_email)
 
     if result["success"]:
         # Показываем ссылку на оплату
