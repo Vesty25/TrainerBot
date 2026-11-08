@@ -791,6 +791,43 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
 
     await state.set_state(GameSetup.waiting_for_ready)
 
+@dp.message(StateFilter(GameSetup.waiting_for_email))
+async def process_email(message: types.Message, state: FSMContext):
+    import re
+    email = message.text.strip()
+
+    # Простая проверка формата email
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        await message.answer(
+            "❌ Похоже, это не email. Введите адрес в формате <code>name@example.com</code>.",
+            parse_mode="HTML",
+        )
+        return
+
+    user_id = message.from_user.id
+    await state.clear()
+
+    from payment import create_subscription_payment
+    result = await create_subscription_payment(user_id, user_email=email)
+
+    if result["success"]:
+        pay_keyboard = types.InlineKeyboardMarkup(
+            inline_keyboard=[
+                [types.InlineKeyboardButton(text="💳 Перейти к оплате", url=result["confirmation_url"])],
+                [types.InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment:{result['payment_id']}")],
+            ]
+        )
+        await message.answer(
+            f"💳 <b>Счёт создан!</b>\n\n"
+            f"Сумма: {result['amount']:.2f} ₽\n"
+            f"Чек придёт на: {email}\n\n"
+            "Нажмите кнопку ниже, чтобы оплатить.",
+            parse_mode="HTML",
+            reply_markup=pay_keyboard,
+        )
+    else:
+        await message.answer(f"❌ Ошибка: {result.get('error')}")
+
 @dp.message(StateFilter(GameSetup.waiting_for_ready))
 async def process_ready(message: types.Message, state: FSMContext):
     """Обработка нажатия кнопки Готов — запуск диалога."""
