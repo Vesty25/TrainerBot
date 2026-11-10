@@ -680,7 +680,7 @@ async def start_game(message: types.Message, state: FSMContext):
 
     # Логируем регистрацию (только если новый пользователь)
     if first_time:
-    log_event(user_id, "registration")
+        log_event(user_id, "registration")
 
     welcome_text = get_welcome_text(user_id, first_time)
     msg = await message.answer(welcome_text, parse_mode="HTML", reply_markup=build_role_keyboard(user_id))
