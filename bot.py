@@ -1175,7 +1175,7 @@ async def finish_game(message: types.Message, state: FSMContext):
             parse_mode="HTML",
             reply_markup=feedback_keyboard,
         )
-
+        
     await state.clear()
     if user_id in user_messages:
         del user_messages[user_id]
