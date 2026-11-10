@@ -555,21 +555,22 @@ async def process_check_payment(callback: types.CallbackQuery):
 
     status = await check_payment_status(payment_id)
 
-   if status == "succeeded":
-    from subscription import add_subscription
-    add_subscription(user_id, days=30)
+    if status == "succeeded":
+        # Активируем подписку
+        from subscription import add_subscription
+        add_subscription(user_id, days=30)
 
-    from database import execute_sql
-    execute_sql(
-        "UPDATE payments SET status = 'paid' WHERE payment_id = ?",
-        (payment_id,)
-    )
+        # Обновляем статус платежа
+        from database import execute_sql
+        execute_sql(
+            "UPDATE payments SET status = 'paid' WHERE payment_id = ?",
+            (payment_id,)
+        )
 
-    # Логируем оплату
-    from payment import get_subscription_price
-    log_event(user_id, "payment", event_data=str(get_subscription_price()))
-
-    await callback.message.answer(...)
+        # Логируем оплату
+        from analytics import log_event
+        from payment import get_subscription_price
+        log_event(user_id, "payment", event_data=str(get_subscription_price()))
 
         await callback.message.answer(
             "✅ <b>Оплата прошла успешно!</b>\n\n"
