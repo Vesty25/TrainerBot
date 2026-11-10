@@ -81,7 +81,6 @@ def fetch_all(query: str, params: tuple = ()):
 
 
 def init_db():
-    """Создаёт таблицы, если их нет."""
     execute_sql("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -115,7 +114,17 @@ def init_db():
         )
     """)
 
-    # Для PostgreSQL используем другой синтаксис
+    # НОВОЕ: журнал событий для исторической статистики
+    execute_sql("""
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            event_type TEXT,
+            event_data TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+
     if DATABASE_URL:
         execute_sql("""
             INSERT INTO settings (key, value) 
