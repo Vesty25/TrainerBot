@@ -1155,7 +1155,7 @@ async def finish_game(message: types.Message, state: FSMContext):
     await message.answer(analysis)
 
     # Логируем завершение с длиной диалога
-log_event(user_id, "game_finish", event_data=str(reply_count))
+    log_event(user_id, "game_finish", event_data=str(reply_count))
 
     # === НОВОЕ: Отправляем предложение оставить обратную связь ===
     if config.FEEDBACK_FORM_URL:
