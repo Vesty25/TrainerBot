@@ -1366,9 +1366,9 @@ async def stats_command(message: types.Message):
     total = fetch_all("SELECT COUNT(*) as c FROM users")[0]["c"]
 
     premium_row = fetch_all(
-        "SELECT COUNT(*) as c FROM users "
-        "WHERE subscription_expires > datetime('now') OR is_test_user = 1"
-    )
+    "SELECT COUNT(*) as c FROM users "
+    "WHERE (subscription_expires::timestamp > NOW() OR is_test_user = 1)"
+)
     premium = premium_row[0]["c"] if premium_row else 0
 
     test_row = fetch_all("SELECT COUNT(*) as c FROM users WHERE is_test_user = 1")
