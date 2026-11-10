@@ -12,6 +12,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiohttp import web
 
 import config
+from analytics import log_event, get_stats_all, get_stats_period, get_users_stats
 from states import GameSetup
 from roles import ROLES
 from scenarios import SCENARIOS
@@ -554,17 +555,21 @@ async def process_check_payment(callback: types.CallbackQuery):
 
     status = await check_payment_status(payment_id)
 
-    if status == "succeeded":
-        # Активируем подписку СРАЗУ
-        from subscription import add_subscription
-        add_subscription(user_id, days=30)
+   if status == "succeeded":
+    from subscription import add_subscription
+    add_subscription(user_id, days=30)
 
-        # Обновляем статус платежа в БД
-        from database import execute_sql
-        execute_sql(
-            "UPDATE payments SET status = 'paid' WHERE payment_id = ?",
-            (payment_id,)
-        )
+    from database import execute_sql
+    execute_sql(
+        "UPDATE payments SET status = 'paid' WHERE payment_id = ?",
+        (payment_id,)
+    )
+
+    # Логируем оплату
+    from payment import get_subscription_price
+    log_event(user_id, "payment", event_data=str(get_subscription_price()))
+
+    await callback.message.answer(...)
 
         await callback.message.answer(
             "✅ <b>Оплата прошла успешно!</b>\n\n"
@@ -672,6 +677,10 @@ async def start_game(message: types.Message, state: FSMContext):
     first_time = ensure_user_exists(user_id, message.from_user.username)
     update_activity(user_id)
 
+    # Логируем регистрацию (только если новый пользователь)
+    if first_time:
+    log_event(user_id, "registration")
+
     welcome_text = get_welcome_text(user_id, first_time)
     msg = await message.answer(welcome_text, parse_mode="HTML", reply_markup=build_role_keyboard(user_id))
     add_selection_message(user_id, msg.message_id)
@@ -725,6 +734,11 @@ async def launch_game(message: types.Message, role_name: str, scenario_name: str
     # Увеличиваем счётчик игр
     increment_games_this_month(user_id)
 
+    log_event(
+    user_id, "game_start",
+    event_data=f"{role_name}|{scenario_name}|{goal_name}"
+)
+    
         # Удаляем предыдущие сообщения с выбором
     await delete_selection_messages(message, user_id)
 
@@ -1139,6 +1153,9 @@ async def finish_game(message: types.Message, state: FSMContext):
 
     await message.answer(analysis)
 
+    # Логируем завершение с длиной диалога
+log_event(user_id, "game_finish", event_data=str(reply_count))
+
     # === НОВОЕ: Отправляем предложение оставить обратную связь ===
     if config.FEEDBACK_FORM_URL:
         feedback_keyboard = types.InlineKeyboardMarkup(
@@ -1248,15 +1265,23 @@ async def admin_command(message: types.Message):
 
     await message.answer(
         "🔧 <b>Админ-панель</b>\n\n"
-        "<b>Команды:</b>\n"
-        "/add_test &lt;user_id&gt; — добавить тестового пользователя\n"
-        "/remove_test &lt;user_id&gt; — убрать тестового\n"
-        "/add_sub &lt;user_id&gt; &lt;дней&gt; — добавить подписку\n"
-        "/remove_sub &lt;user_id&gt; — отозвать подписку\n"
-        "/check_user &lt;user_id&gt; — проверить статус\n"
-        "/stats — статистика\n"
-        "/toggle_subscription — вкл/выкл режим подписки\n"
-        "/export_db — скачать бекап базы данных",
+        "<b>Пользователи:</b>\n"
+        "/add_test &lt;id&gt; — добавить тестового\n"
+        "/remove_test &lt;id&gt; — убрать тестового\n"
+        "/add_sub &lt;id&gt; &lt;дней&gt; — добавить подписку\n"
+        "/remove_sub &lt;id&gt; — отозвать подписку\n"
+        "/check_user &lt;id&gt; — проверить статус\n\n"
+        "<b>Статистика:</b>\n"
+        "/stats — текущий срез\n"
+        "/stats_all — с момента запуска\n"
+        "/stats_period &lt;дней&gt; — за период\n\n"
+        "<b>Прочее:</b>\n"
+        "/toggle_subscription — вкл/выкл подписку\n"
+        "/export_db — бекап БД\n"
+        "/maintenance_on — техработы\n"
+        "/maintenance_off — выключить техработы\n"
+        "/broadcast_back — уведомить всех\n"
+        "/maintenance_status — статус техработ",
         parse_mode="HTML",
     )
 
@@ -1358,36 +1383,90 @@ async def check_user_command(message: types.Message):
 
 @dp.message(Command("stats"))
 async def stats_command(message: types.Message):
+    """Текущая статистика (срез на сейчас)."""
     if message.from_user.id not in ADMIN_USER_IDS:
         return
 
-    from database import fetch_all
-
-    total = fetch_all("SELECT COUNT(*) as c FROM users")[0]["c"]
-
-    premium_row = fetch_all(
-    "SELECT COUNT(*) as c FROM users "
-    "WHERE (subscription_expires::timestamp > NOW() OR is_test_user = 1)"
-)
-    premium = premium_row[0]["c"] if premium_row else 0
-
-    test_row = fetch_all("SELECT COUNT(*) as c FROM users WHERE is_test_user = 1")
-    test = test_row[0]["c"] if test_row else 0
-
-    played_row = fetch_all("SELECT COUNT(*) as c FROM users WHERE has_played = 1")
-    played = played_row[0]["c"] if played_row else 0
-
-    games_row = fetch_all("SELECT SUM(games_this_month) as c FROM users")
-    total_games = games_row[0]["c"] if games_row and games_row[0]["c"] else 0
+    users = get_users_stats(days=None)
+    events = get_stats_all()
 
     await message.answer(
-        f"📊 <b>Статистика</b>\n\n"
-        f"👥 Всего пользователей: <b>{total}</b>\n"
-        f"💎 Премиум: <b>{premium}</b>\n"
-        f"🧪 Тестовых: <b>{test}</b>\n"
-        f"🎮 Играли хотя бы раз: <b>{played}</b>\n"
-        f"🔢 Всего игр в этом месяце: <b>{total_games}</b>\n"
-        f"🆓 Бесплатных: <b>{total - premium}</b>",
+        "📊 <b>Текущая статистика</b>\n\n"
+        f"👥 Всего пользователей: <b>{users['total']}</b>\n"
+        f"💎 Премиум: <b>{users['premium']}</b>\n"
+        f"🧪 Тестовых: <b>{users['test']}</b>\n"
+        f"🎮 Играли хотя бы раз: <b>{users['played']}</b>\n"
+        f"🆓 Бесплатных: <b>{users['free']}</b>\n\n"
+        f"📈 <b>С момента запуска:</b>\n"
+        f"🎮 Запусков игр: <b>{events['games_started']}</b>\n"
+        f"✅ Завершено с анализом: <b>{events['games_finished']}</b>\n"
+        f"💰 Платежей: <b>{events['payments_count']}</b> на сумму <b>{events['payments_total']:.2f} ₽</b>",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("stats_all"))
+async def stats_all_command(message: types.Message):
+    """Статистика с момента запуска бота."""
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    events = get_stats_all()
+    users = get_users_stats(days=None)
+
+    await message.answer(
+        "📊 <b>Статистика с момента запуска</b>\n\n"
+        f"👥 Всего регистраций: <b>{events['registrations']}</b>\n"
+        f"🎮 Уникальных игроков: <b>{events['unique_players']}</b>\n"
+        f"🎯 Запусков игр: <b>{events['games_started']}</b>\n"
+        f"✅ Завершено с анализом: <b>{events['games_finished']}</b>\n"
+        f"📏 Средняя длина диалога: <b>{events['avg_dialog_length']}</b> реплик\n\n"
+        f"💰 <b>Платежи:</b>\n"
+        f"• Количество: <b>{events['payments_count']}</b>\n"
+        f"• Сумма: <b>{events['payments_total']:.2f} ₽</b>\n\n"
+        f"👥 <b>Пользователи (сейчас):</b>\n"
+        f"• Всего: {users['total']}\n"
+        f"• Премиум: {users['premium']}\n"
+        f"• Бесплатных: {users['free']}",
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("stats_period"))
+async def stats_period_command(message: types.Message):
+    """Статистика за последние N дней. Использование: /stats_period 7"""
+    if message.from_user.id not in ADMIN_USER_IDS:
+        return
+
+    try:
+        days = int(message.text.split()[1])
+        if days < 1 or days > 3650:
+            raise ValueError
+    except (IndexError, ValueError):
+        await message.answer(
+            "❌ Использование: /stats_period &lt;дней&gt;\n"
+            "Например: /stats_period 7",
+            parse_mode="HTML",
+        )
+        return
+
+    events = get_stats_period(days)
+    users = get_users_stats(days)
+
+    await message.answer(
+        f"📊 <b>Статистика за {days} дней</b>\n\n"
+        f"👥 Новых регистраций: <b>{events['registrations']}</b>\n"
+        f"🎮 Уникальных игроков: <b>{events['unique_players']}</b>\n"
+        f"🎯 Запусков игр: <b>{events['games_started']}</b>\n"
+        f"✅ Завершено с анализом: <b>{events['games_finished']}</b>\n"
+        f"📏 Средняя длина диалога: <b>{events['avg_dialog_length']}</b> реплик\n\n"
+        f"💰 <b>Платежи:</b>\n"
+        f"• Количество: <b>{events['payments_count']}</b>\n"
+        f"• Сумма: <b>{events['payments_total']:.2f} ₽</b>\n\n"
+        f"👥 <b>Пользователи (зарегистрированы в этот период):</b>\n"
+        f"• Всего: {users['total']}\n"
+        f"• Премиум: {users['premium']}\n"
+        f"• Бесплатных: {users['free']}",
         parse_mode="HTML",
     )
 
